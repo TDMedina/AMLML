@@ -77,7 +77,8 @@ def train_model(data, model, n_epochs, batch_size=10):
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-        print(f"Latest loss {loss}\r", end="")
+        # print(f"Latest loss {loss}\r", end="")
+    print(f"Final loss: {loss}\r", end="")
 
 
 if __name__ == '__main__':
