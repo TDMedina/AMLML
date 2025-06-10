@@ -1,7 +1,8 @@
 
 import torch
 from torch import optim, nn
-from tqdm import tqdm
+# from tqdm import tqdm
+from tqdm.auto import tqdm
 
 from amlml.simulation import make_simulation_set_from_data
 
@@ -68,8 +69,8 @@ def train_model(data, model, n_epochs, batch_size=10):
     data_in = data[1:]
     data_true = data[0]
 
-    for epoch in tqdm(range(n_epochs)):
-        for i in tqdm(range(0, data_in.shape[1], batch_size), leave=False, position=0):
+    for epoch in tqdm(range(n_epochs), position=0, leave=True):
+        for i in tqdm(range(0, data_in.shape[1], batch_size), leave=False, position=1):
             batch_in = data_in[:, i:i+batch_size, :]
             batch_true = data_true[i:i+batch_size, :]
             batch_out = model(batch_in)
