@@ -69,7 +69,7 @@ def train_model(data, model, n_epochs, batch_size=10):
     data_true = data[0]
 
     for epoch in tqdm(range(n_epochs)):
-        for i in range(0, data_in.shape[1], batch_size):
+        for i in tqdm(range(0, data_in.shape[1], batch_size), leave=False, position=0):
             batch_in = data_in[:, i:i+batch_size, :]
             batch_true = data_true[i:i+batch_size, :]
             batch_out = model(batch_in)
