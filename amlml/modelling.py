@@ -7,6 +7,128 @@ from tqdm.auto import tqdm
 from amlml.simulation import make_simulation_set_from_data
 
 
+"""
+1. Pass the data to the master LocalLayer.
+    2. The LocalLayer passes every tech-gene slice into a GeneGroup.
+        3. The GeneGroups each pass one dimension into a SingleShallow
+            4. The SingleShallows run the first 2 layers: [m] > [m m m m] > [m]
+        5. The GeneGroups concatenate the results and feed them into a fully connected layer: [x] [y] > [x y] > [z]
+    6. The LocalLayer concatenates the results: [g] [g] [g] > [g g g] connected layer.
+7. Pass the LocalLayer results to the fully connected layers.
+"""
+
+class SingleShallow(nn.Module):
+    """Initial 2 layers for a single tech for a single gene.
+    Shape is 1 > n > 1. Input should be a (samples, 1) matrix corresponding to one
+    technology of one gene for all samples.
+    """
+    def __init__(self, hidden_size):
+        super().__init__()
+        self.in_layer = nn.Linear(1, hidden_size)
+        self.out_layer = nn.Linear(hidden_size, 1)
+        self.activation = nn.ReLU()
+
+    def forward(self, x):
+        x = self.activation(self.in_layer(x))
+        x = self.out_layer(x)
+        return x
+
+
+class GeneGroup(nn.Module):
+    def __init__(self, tech_layers, hidden_size):
+        super().__init__()
+        self.shallows = nn.ModuleList([SingleShallow(hidden_size)
+                                       for _ in range(tech_layers)])
+        self.combinor = nn.Linear(tech_layers, 1)
+
+    def forward(self, x):
+        x = [self.shallows[i](x[i:i+1].T) for i in range(x.shape[0])]
+        x = torch.concatenate(x, axis=-1)
+        x = self.combinor(x)
+        return x
+
+
+class LocalLayers(nn.Module):
+    def __init__(self, tech_layers, n_genes, hidden_size):
+        super().__init__()
+        self.gene_groups = nn.ModuleList([GeneGroup(tech_layers, hidden_size)
+                                          for _ in range(n_genes)])
+
+    def forward(self, x):
+        x = [self.gene_groups[i](x[:, :, i:i+1]) for i in range(x.shape[2])]
+        print(x)
+        x = torch.concatenate(x, axis=-1)
+        print(x)
+        return x
+
+class ConnectedLayers(nn.Module):
+    def __init__(self, n_genes, shrinkage_factor=10, minimum_size=10,
+                 final_size=1):
+        super().__init__()
+
+        connected_layers = []
+        n = n_genes
+        while minimum_size <= (n_out := n // shrinkage_factor):
+            connected_layers.append(nn.Linear(n, n_out))
+            n = n_out
+        connected_layers.append(nn.Linear(n, final_size))
+        self.connected_layers = nn.ModuleList(connected_layers)
+        self.activator = nn.ReLU()
+        self.final_activator = nn.ReLU()
+
+    def forward(self, x):
+        for layer in self.connected_layers[:-1]:
+            x = self.activator(layer(x))
+        x = self.final_activator(self.connected_layers[-1](x))
+        return x
+
+
+class CombinedAMLModel(nn.Module):
+    def __init__(self, tech_layers, n_genes, hidden_size=4, shrinkage_factor=10,
+                 minimum_size=10, final_size=1):
+        super().__init__()
+
+        self.local_layers = LocalLayers(tech_layers, n_genes, hidden_size)
+        self.connected_layers = ConnectedLayers(n_genes, shrinkage_factor,
+                                                minimum_size, final_size)
+
+    def forward(self, x):
+        x = self.local_layers(x)
+        x = self.connected_layers(x)
+        return x
+
+
+#
+# class TechShallows(nn.Module):
+#     """Combines all SingleShallows layers for all genes of one technology.
+#
+#     Input should be a (samples, genes) matrix corresponding to one technology for all
+#     genes for all samples.
+#     """
+#     def __init__(self, n_genes, hidden_size):
+#         super().__init__()
+#         self.shallows = nn.ModuleList([SingleShallow(hidden_size)
+#                                        for _ in range(n_genes)])
+#         self.activation = nn.ReLU()
+#
+#     def forward(self, x):
+#         x = [self.shallows[i](x[:, i:i+1]) for i in range(x.shape[1])]
+#         x = self.activation(torch.concat(x, axis=1))
+#         return x
+#
+#
+# class GenePairs(nn.Module):
+#     """Combines all TechShallows"""
+#     def __init__(self, n_tech_layers, n_genes, hidden_size):
+#         super().__init__()
+#         self.gene_pairs = nn.ModuleList([TechShallows(n_genes, hidden_size)
+#                                          for tech in range(n_tech_layers)])
+#
+#     def forward(self, x):
+#         x = [self.gene_pairs[i](x[i]) for i in range(x.shape[0])]
+#         return x
+
+
 class LocalLinear3D(nn.Module):
     def __init__(self, n_features, n_levels):
         super().__init__()
