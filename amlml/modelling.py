@@ -56,9 +56,7 @@ class LocalLayers(nn.Module):
 
     def forward(self, x):
         x = [self.gene_groups[i](x[:, :, i:i+1]) for i in range(x.shape[2])]
-        print(x)
         x = torch.concatenate(x, axis=-1)
-        print(x)
         return x
 
 class ConnectedLayers(nn.Module):
