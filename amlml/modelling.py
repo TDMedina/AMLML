@@ -59,9 +59,9 @@ class LocalLayers(nn.Module):
         x = torch.concatenate(x, axis=-1)
         return x
 
+
 class ConnectedLayers(nn.Module):
-    def __init__(self, n_genes, shrinkage_factor=10, minimum_size=10,
-                 final_size=1):
+    def __init__(self, n_genes, shrinkage_factor=10, minimum_size=10, final_size=1):
         super().__init__()
 
         connected_layers = []
@@ -69,15 +69,17 @@ class ConnectedLayers(nn.Module):
         while minimum_size <= (n_out := n // shrinkage_factor):
             connected_layers.append(nn.Linear(n, n_out))
             n = n_out
-        connected_layers.append(nn.Linear(n, final_size))
+        connected_layers.append(nn.Linear(n, final_size, bias=False))
         self.connected_layers = nn.ModuleList(connected_layers)
         self.activator = nn.ReLU()
-        self.final_activator = nn.ReLU()
+        # self.final_activator = nn.ReLU()
 
     def forward(self, x):
         for layer in self.connected_layers[:-1]:
-            x = self.activator(layer(x))
-        x = self.final_activator(self.connected_layers[-1](x))
+            x = layer(x)
+            x = self.activator(x)
+        x = self.connected_layers[-1](x)
+        # x = self.final_activator(self.connected_layers[-1](x))
         return x
 
 
@@ -139,34 +141,26 @@ class LocalLinear3D(nn.Module):
 
 
 class AMLNeuralNetwork3D(nn.Module):
-    def __init__(self, n_genes, n_levels, shrinkage=1):
+    def __init__(self, n_genes, n_levels, shrinkage_factor=10, minimum_size=10,
+                 final_size=1):
         super().__init__()
         self.local_connected = LocalLinear3D(n_genes, n_levels)
-        self.act1 = nn.ReLU()
 
-        self.full1 = nn.Linear(n_genes, n_genes)
-        self.fullact1 = nn.ReLU()
+        self.connected_layers = []
+        n = n_genes
+        while minimum_size <= (n_out := n // shrinkage_factor):
+            self.connected_layers.append(nn.Linear(n, n_out))
+            n = n_out
+        self.connected_layers.append(nn.Linear(n_out, final_size))
 
-        self.full2 = nn.Linear(n_genes, n_genes)
-        self.fullact2 = nn.ReLU()
-
-        self.full3 = nn.Linear(n_genes, n_genes)
-        self.fullact3 = nn.ReLU()
-
-        self.output = nn.Linear(n_genes, 1)
-        # self.act_output = nn.Sigmoid()
+        self.activator = nn.ReLU()
+        self.final_activator = nn.ReLU()
 
     def forward(self, x):
-        x = self.local_connected(x)
-        x = self.act1(x)
-        x = self.full1(x)
-        x = self.fullact1(x)
-        x = self.full2(x)
-        x = self.fullact2(x)
-        x = self.full3(x)
-        x = self.fullact3(x)
-        # x = self.output(x)
-        # x = self.act_output(x)
+        x = self.activator(self.local_connected(x))
+        for layer in self.connected_layers[:-1]:
+            x = self.activator(layer(x))
+        x = self.final_activator(self.connected_layers[-1](x))
         return x
 
 
