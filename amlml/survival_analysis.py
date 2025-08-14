@@ -220,7 +220,7 @@ def test_network(expression_data, alpha):
     model.optimizer.set_lr(0.0001)
 
     epochs = 120
-    callbacks = [tt.callbacks.EarlyStopping(patience=60, min_epochs=)]
+    callbacks = [tt.callbacks.EarlyStopping(patience=60)]
     verbose = True
 
     log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose,
