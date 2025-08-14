@@ -293,5 +293,6 @@ for alpha, genes in tqdm(non_zero_genes.items()):
     expression = expression.loc[:, list(genes)]
     expression = np.stack([np.array(expression), np.zeros(expression.shape)], axis=0)
     expression = tensor(expression, dtype=float32).permute(1, 0, 2)
+    expression = split_to_dict(expression)
     results = test_network(expression, alpha)
     all_results[alpha] = results
