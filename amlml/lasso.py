@@ -65,7 +65,7 @@ def test_lasso_penalties(data, outcomes):
 
 
 def get_non_zero_genes(coefficients):
-    non_zeros = {set(series.index) for x in coefficients
+    non_zeros = {x: list(series.index) for x in coefficients
                  if (series := coefficients[x].loc[coefficients[x] != 0]).empty}
     return non_zeros
 
