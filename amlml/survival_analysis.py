@@ -113,75 +113,75 @@ outcomes["test"] = outcomes["test"].T.astype(float)
 
 
 # %% Define network and model.
-network = SuperModel(n_genes=expression["train"].shape[-1],
-                     n_tech=2,
-                     n_expansion=4,
-                     n_clinical=36,
-                     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 5},
-                     embedding_dims={"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3},
-                     shrinkage_factor=10,
-                     minimum_size=10,
-                     final_size=1)
-
-model = CoxPH(network, tt.optim.Adam)
-
-train_args = (expression["train"], categoricals["train"], non_categoricals["train"])
-validation_args = (expression["validation"], categoricals["validation"], non_categoricals["validation"])
-test_args = (expression["test"], categoricals["test"], non_categoricals["test"])
-
-
-# %% Run the model.
-batch_size = 161
-lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
-# lrfinder.plot()
-# plt.show()
-
-lr_optim = lrfinder.get_best_lr()
-model.optimizer.set_lr(0.0001)
-
-epochs = 60
-# callbacks = [tt.callbacks.EarlyStopping()]
-callbacks = []
-verbose = True
-
-log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose,
-                val_data=(validation_args, outcomes["validation"]),
-                val_batch_size=batch_size)
-# log.plot()
-# plt.show()
-
-
-# %% Evaluate the model.
-model.partial_log_likelihood(validation_args, outcomes["validation"]).mean()
-model.compute_baseline_hazards()
-
-surv = model.predict_surv_df(test_args)
-# surv.plot()
-# plt.ylabel("S(t | x)")
-# plt.xlabel("Time")
-# plt.show()
-
-ev = EvalSurv(surv, outcomes["test"][0], outcomes["test"][1], censor_surv="km")
-ev.concordance_td()
-
-time_grid = np.linspace(outcomes["test"][0].min(), outcomes["test"].max(), 100)
-# ev.brier_score(time_grid).plot()
-# plt.show()
-
-brier_scores = ev.brier_score(time_grid)
-ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
-       / (brier_scores.index[-1] - brier_scores.index[0]))
-
-# ev.integrated_nbll(time_grid)
-
-predictions = [float(x[0]) for x in model.predict(test_args)]
-km_test_df = pd.DataFrame(zip(*outcomes["test"], predictions),
-                          columns=["duration", "event", "risk"])
-
-
-# %% Survival partitioning.
-optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
-risk_splits = np.cumulative_sum(optimal_splits.x)
+# network = SuperModel(n_genes=expression["train"].shape[-1],
+#                      n_tech=2,
+#                      n_expansion=4,
+#                      n_clinical=36,
+#                      covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 5},
+#                      embedding_dims={"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3},
+#                      shrinkage_factor=10,
+#                      minimum_size=10,
+#                      final_size=1)
+#
+# model = CoxPH(network, tt.optim.Adam)
+#
+# train_args = (expression["train"], categoricals["train"], non_categoricals["train"])
+# validation_args = (expression["validation"], categoricals["validation"], non_categoricals["validation"])
+# test_args = (expression["test"], categoricals["test"], non_categoricals["test"])
+#
+#
+# # %% Run the model.
+# batch_size = 161
+# lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
+# # lrfinder.plot()
+# # plt.show()
+#
+# lr_optim = lrfinder.get_best_lr()
+# model.optimizer.set_lr(0.0001)
+#
+# epochs = 60
+# # callbacks = [tt.callbacks.EarlyStopping()]
+# callbacks = []
+# verbose = True
+#
+# log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose,
+#                 val_data=(validation_args, outcomes["validation"]),
+#                 val_batch_size=batch_size)
+# # log.plot()
+# # plt.show()
+#
+#
+# # %% Evaluate the model.
+# model.partial_log_likelihood(validation_args, outcomes["validation"]).mean()
+# model.compute_baseline_hazards()
+#
+# surv = model.predict_surv_df(test_args)
+# # surv.plot()
+# # plt.ylabel("S(t | x)")
+# # plt.xlabel("Time")
+# # plt.show()
+#
+# ev = EvalSurv(surv, outcomes["test"][0], outcomes["test"][1], censor_surv="km")
+# ev.concordance_td()
+#
+# time_grid = np.linspace(outcomes["test"][0].min(), outcomes["test"].max(), 100)
+# # ev.brier_score(time_grid).plot()
+# # plt.show()
+#
+# brier_scores = ev.brier_score(time_grid)
+# ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
+#        / (brier_scores.index[-1] - brier_scores.index[0]))
+#
+# # ev.integrated_nbll(time_grid)
+#
+# predictions = [float(x[0]) for x in model.predict(test_args)]
+# km_test_df = pd.DataFrame(zip(*outcomes["test"], predictions),
+#                           columns=["duration", "event", "risk"])
+#
+#
+# # %% Survival partitioning.
+# optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
+# risk_splits = np.cumulative_sum(optimal_splits.x)
 # plot_survival_curves(km_test_df)
 
 
