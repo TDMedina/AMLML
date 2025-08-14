@@ -182,7 +182,7 @@ km_test_df = pd.DataFrame(zip(*outcomes["test"], predictions),
 # %% Survival partitioning.
 optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
 risk_splits = np.cumulative_sum(optimal_splits.x)
-plot_survival_curves(km_test_df)
+# plot_survival_curves(km_test_df)
 
 
 # %% Do Elastic Net to test gene subsets.
