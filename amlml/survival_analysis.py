@@ -133,8 +133,8 @@ test_args = (expression["test"], categoricals["test"], non_categoricals["test"])
 # %% Run the model.
 batch_size = 161
 lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
-lrfinder.plot()
-plt.show()
+# lrfinder.plot()
+# plt.show()
 
 lr_optim = lrfinder.get_best_lr()
 model.optimizer.set_lr(0.0001)
@@ -147,8 +147,8 @@ verbose = True
 log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose,
                 val_data=(validation_args, outcomes["validation"]),
                 val_batch_size=batch_size)
-log.plot()
-plt.show()
+# log.plot()
+# plt.show()
 
 
 # %% Evaluate the model.
@@ -156,17 +156,17 @@ model.partial_log_likelihood(validation_args, outcomes["validation"]).mean()
 model.compute_baseline_hazards()
 
 surv = model.predict_surv_df(test_args)
-surv.plot()
-plt.ylabel("S(t | x)")
-plt.xlabel("Time")
-plt.show()
+# surv.plot()
+# plt.ylabel("S(t | x)")
+# plt.xlabel("Time")
+# plt.show()
 
 ev = EvalSurv(surv, outcomes["test"][0], outcomes["test"][1], censor_surv="km")
 ev.concordance_td()
 
 time_grid = np.linspace(outcomes["test"][0].min(), outcomes["test"].max(), 100)
-ev.brier_score(time_grid).plot()
-plt.show()
+# ev.brier_score(time_grid).plot()
+# plt.show()
 
 brier_scores = ev.brier_score(time_grid)
 ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
