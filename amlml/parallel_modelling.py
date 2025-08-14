@@ -41,8 +41,8 @@ class ParallelBellowsLayers(nn.Module):
         # that each measurement of each gene is treated independently. Then, transpose to
         # make iteration faster.
 
-        # CoxPH can only batch on the first dimension, so the data is now reshaped
-        # prior to input.
+        # CoxPH can only batch on the first dimension with its built-in training
+        # routine, so the data is now reshaped prior to input.
         # x = x.permute(1, 0, 2).reshape([-1, self.n_genes*2]).T
         x = x.reshape([-1, self.n_genes*2]).T
 

@@ -64,13 +64,19 @@ def test_lasso_penalties(data, outcomes):
     return coefficients_lasso
 
 
+def get_non_zero_genes(coefficients):
+    non_zeros = {set(series.index) for x in coefficients
+                 if (series := coefficients[x].loc[coefficients[x] != 0])}
+    return non_zeros
+
+
 def alpha_estimate_cross_validation(data, outcomes):
     outcomes = np.array(list(zip([x for x in outcomes[1]],
                                  [x for x in outcomes[0]])),
                         dtype="bool,f")
 
     coxnet_pipe = make_pipeline(StandardScaler(),
-                                CoxnetSurvivalAnalysis(l1_ratio=1,
+                                CoxnetSurvivalAnalysis(l1_ratio=0.9,
                                                        alpha_min_ratio=0.01,
                                                        n_alphas=100,
                                                        max_iter=100))
