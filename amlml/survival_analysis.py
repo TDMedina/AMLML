@@ -191,7 +191,7 @@ coefficients = test_lasso_penalties(data.Expression.iloc[expression["splits"][0]
 non_zero_genes = get_non_zero_genes(coefficients)
 
 def test_network(expression_data, alpha):
-    outdir = f"./training_test.{alpha:.3e}.{expression_data["train"].shape[-1]}_genes/"
+    outdir = f"./training_test_{alpha:.3e}_{expression_data["train"].shape[-1]}genes/"
     os.mkdir(outdir)
     network = SuperModel(n_genes=expression_data["train"].shape[-1],
                          n_tech=2,
