@@ -312,3 +312,4 @@ for alpha, genes in tqdm(non_zero_genes.items()):
     expression = split_to_dict(expression)
     results = test_network(expression, alpha)
     all_results[alpha] = results
+    plt.close('all')
