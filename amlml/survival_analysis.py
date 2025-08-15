@@ -25,7 +25,7 @@ from amlml.gene_set import GeneSet
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
 
-l1_ratio = sys.argv[1]
+l1_ratio = float(sys.argv[1])
 torch.manual_seed(15370764774595565096)
 
 def read_data(expression_data, clinical_data, clinical_yaml, geneset):
