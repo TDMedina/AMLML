@@ -1,5 +1,6 @@
 
 import os
+import sys
 import numpy as np
 import pandas as pd
 from tqdm import tqdm
@@ -24,7 +25,7 @@ from amlml.gene_set import GeneSet
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
 
-
+l1_ratio = sys.argv[1]
 torch.manual_seed(15370764774595565096)
 
 def read_data(expression_data, clinical_data, clinical_yaml, geneset):
@@ -187,7 +188,7 @@ outcomes["test"] = outcomes["test"].T.astype(float)
 
 # %% Do Elastic Net to test gene subsets.
 coefficients = test_lasso_penalties(data.Expression.iloc[expression["splits"][0]],
-                                    outcomes["train"])
+                                    outcomes["train"], l1_ratio=l1_ratio)
 non_zero_genes = get_non_zero_genes(coefficients)
 
 def test_network(expression_data, alpha):
