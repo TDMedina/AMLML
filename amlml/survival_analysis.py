@@ -191,8 +191,20 @@ coefficients = test_lasso_penalties(data.Expression.iloc[expression["splits"][0]
                                     outcomes["train"], l1_ratio=l1_ratio)
 non_zero_genes = get_non_zero_genes(coefficients)
 
+aders5 = ["ENSG00000129187", "ENSG00000131747", "ENSG00000103222",
+          "ENSG00000005381", "ENSG00000159228"]
+plsc6 = ["ENSG00000088305", "ENSG00000205336", "ENSG00000174059",
+         "ENSG00000120833", "ENSG00000128040", "ENSG00000226777"]
+lsc17 = ["ENSG0000008830", "ENSG0000013058", "ENSG0000020597", "ENSG0000012880",
+          "ENSG0000010434", "ENSG0000013872", "ENSG0000011365", "ENSG0000022677",
+          "ENSG0000010581", "ENSG0000008888", "ENSG0000012083", "ENSG0000009593",
+          "ENSG0000013453", "ENSG0000016668", "ENSG0000017405", "ENSG0000019613",
+          "ENSG0000020533"]
+non_zero_genes.update({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17})
+
 def test_network(expression_data, alpha):
-    outdir = f"./training_test_{alpha:.3e}_{expression_data["train"].shape[-1]}genes/"
+    group_name = f"{alpha:.3f}" if isinstance(alpha, float) else alpha
+    outdir = f"./training_test_{group_name}_{expression_data["train"].shape[-1]}genes/"
     os.mkdir(outdir)
     network = SuperModel(n_genes=expression_data["train"].shape[-1],
                          n_tech=2,
