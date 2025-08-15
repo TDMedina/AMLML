@@ -215,6 +215,7 @@ def test_network(expression_data, alpha):
     lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
     lrfinder.plot()
     plt.savefig(f"{outdir}/learning.png")
+    plt.close()
 
     # lr_optim = lrfinder.get_best_lr()
     model.optimizer.set_lr(0.0001)
@@ -228,6 +229,7 @@ def test_network(expression_data, alpha):
                     val_batch_size=batch_size)
     log.plot()
     plt.savefig(f"{outdir}/fitness.png")
+    plt.close()
 
     likelihood = model.partial_log_likelihood(validation_args, outcomes["validation"]).mean()
     model.compute_baseline_hazards()
@@ -244,6 +246,7 @@ def test_network(expression_data, alpha):
     time_grid = np.linspace(outcomes["test"][0].min(), outcomes["test"].max(), 100)
     ev.brier_score(time_grid).plot()
     plt.savefig(f"{outdir}/brier_plot.png")
+    plt.close()
 
     brier_scores = ev.brier_score(time_grid)
     ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
@@ -270,6 +273,7 @@ def test_network(expression_data, alpha):
     plt.legend()
     plt.grid(True)
     plt.savefig(f"{outdir}/kaplan_meier.png")
+    plt.close()
 
     logranks = iterate_logrank_tests(km_test_df)
     with open(f"{outdir}/results.txt", "w") as outfile:
