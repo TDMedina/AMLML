@@ -194,12 +194,37 @@ non_zero_genes = get_non_zero_genes(coefficients)
 aders5 = ["ENSG00000129187", "ENSG00000131747", "ENSG00000103222",
           "ENSG00000005381", "ENSG00000159228"]
 plsc6 = ["ENSG00000088305", "ENSG00000205336", "ENSG00000174059",
-         "ENSG00000120833", "ENSG00000128040", "ENSG00000226777"]
-lsc17 = ["ENSG0000008830", "ENSG0000013058", "ENSG0000020597", "ENSG0000012880",
-          "ENSG0000010434", "ENSG0000013872", "ENSG0000011365", "ENSG0000022677",
-          "ENSG0000010581", "ENSG0000008888", "ENSG0000012083", "ENSG0000009593",
-          "ENSG0000013453", "ENSG0000016668", "ENSG0000017405", "ENSG0000019613",
-          "ENSG0000020533"]
+         "ENSG00000120833", "ENSG00000128040"] #, "ENSG00000226777"]
+lsc17 = ["ENSG00000088305", "ENSG00000130584", "ENSG00000205978", "ENSG00000128805",
+         "ENSG00000104341", "ENSG00000138722", "ENSG00000113657", "ENSG00000105810",
+         "ENSG00000088882", "ENSG00000120833", "ENSG00000095932", "ENSG00000134531",
+         "ENSG00000174059", "ENSG00000196139", "ENSG00000205336", "ENSG00000166681",]
+        # "ENSG00000226777"]
+gene_id_dict = {'ENSG00000104341': 'ENSG00000104341.17',
+                'ENSG00000159228': 'ENSG00000159228.13',
+                'ENSG00000088305': 'ENSG00000088305.18',
+                'ENSG00000120833': 'ENSG00000120833.14',
+                'ENSG00000129187': 'ENSG00000129187.14',
+                'ENSG00000131747': 'ENSG00000131747.15',
+                'ENSG00000138722': 'ENSG00000138722.10',
+                'ENSG00000166681': 'ENSG00000166681.14',
+                'ENSG00000205336': 'ENSG00000205336.14',
+                'ENSG00000128040': 'ENSG00000128040.11',
+                'ENSG00000196139': 'ENSG00000196139.14',
+                'ENSG00000088882': 'ENSG00000088882.8',
+                'ENSG00000103222': 'ENSG00000103222.20',
+                'ENSG00000113657': 'ENSG00000113657.13',
+                'ENSG00000105810': 'ENSG00000105810.10',
+                'ENSG00000095932': 'ENSG00000095932.7',
+                'ENSG00000130584': 'ENSG00000130584.12',
+                'ENSG00000005381': 'ENSG00000005381.8',
+                'ENSG00000128805': 'ENSG00000128805.15',
+                'ENSG00000134531': 'ENSG00000134531.10',
+                'ENSG00000205978': 'ENSG00000205978.6',
+                'ENSG00000174059': 'ENSG00000174059.17'}
+aders5 = [gene_id_dict[x] for x in aders5]
+plsc6 = [gene_id_dict[x] for x in plsc6]
+lsc17 = [gene_id_dict[x] for x in lsc17]
 non_zero_genes.update({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17})
 
 def test_network(expression_data, alpha):
@@ -304,7 +329,8 @@ def test_network(expression_data, alpha):
     return results
 
 all_results = dict()
-for alpha, genes in tqdm(non_zero_genes.items()):
+for alpha, genes in tqdm({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17}.items()):
+# for alpha, genes in tqdm(non_zero_genes.items()):
     expression = data.Expression
     expression = expression.loc[:, list(genes)]
     expression = np.stack([np.array(expression), np.zeros(expression.shape)], axis=0)
