@@ -329,8 +329,8 @@ def test_network(expression_data, alpha):
     return results
 
 all_results = dict()
-for alpha, genes in tqdm({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17}.items()):
-# for alpha, genes in tqdm(non_zero_genes.items()):
+# for alpha, genes in tqdm({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17}.items()):
+for alpha, genes in tqdm(non_zero_genes.items()):
     expression = data.Expression
     expression = expression.loc[:, list(genes)]
     expression = np.stack([np.array(expression), np.zeros(expression.shape)], axis=0)
