@@ -50,22 +50,21 @@ def test_lasso_penalties(data, outcomes, l1_ratio=1):
                                  [x for x in outcomes[0]])),
                         dtype="bool,f")
     # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=1.0, alpha_min_ratio=0.0001)
-    # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=0.9, alpha_min_ratio=1, n_alphas=2)
-    # cox_lasso.fit(data, outcomes)
-    # max_alpha = cox_lasso.alphas_[0]
-    # alphas = np.logspace(np.log2(max_alpha/1000000), np.log2(max_alpha), 100, base=2)
-    #
-    # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=0.9, alphas=alphas)
-    cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.00001)
+    # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.00001,
+    #                                    n_alphas=20, verbose=True)
+    cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.01,
+                                       n_alphas=20, verbose=True)
     cox_lasso.fit(data, outcomes)
-
     coefficients_lasso = pd.DataFrame(cox_lasso.coef_, index=data.columns,
                                       columns=np.round(cox_lasso.alphas_, 5))
     return coefficients_lasso
 
 
 def get_non_zero_genes(coefficients):
-    non_zeros = {x: list(series.index) for x in coefficients
+    coefficients = coefficients.reset_index()
+    coefficients = coefficients.set_index("index", append=True)
+    coefficients.index.names = ["index", "gene"]
+    non_zeros = {x: list(zip(*series.index)) for x in coefficients
                  if not (series := coefficients[x].loc[coefficients[x] != 0]).empty}
     return non_zeros
 

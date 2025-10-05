@@ -1,43 +1,34 @@
 
 import os
-import sys
+from string import ascii_uppercase
+# import sys
+
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from tqdm import tqdm
-
-from lifelines import KaplanMeierFitter
-from lifelines.statistics import logrank_test
-import matplotlib.pyplot as plt
 from scipy.integrate import simpson
+from sklearn.model_selection import StratifiedKFold, train_test_split
+from tqdm import tqdm
 
 import torch
 from torch import float32, tensor
 import torchtuples as tt
 
+from lifelines import KaplanMeierFitter
 from pycox.models import CoxPH
 from pycox.evaluation import EvalSurv
 
-from amlml.survival_data import (read_clinical_data, prepare_outcomes,
-                                 code_categoricals, add_nan_mask_stack)
-from amlml.rna_data import read_count_data
-from amlml.parallel_modelling import CombinedParallelModel, SuperModel
+from amlml.survival_data import prepare_outcomes, code_categoricals, add_nan_mask_stack
+from amlml.rna_data import (read_count_data, read_count_data2, filter_rna_dataset,
+                            read_rna_dataset, read_samples, calculate_tpm, replace_with_tpm)
+from amlml.microarray_data import read_microarray_dataset, read_gse37642
+from amlml.parallel_modelling import SuperModel
 from amlml.gene_set import GeneSet
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
 
-l1_ratio = float(sys.argv[1])
-torch.manual_seed(15370764774595565096)
-
-def read_data(expression_data, clinical_data, clinical_yaml, geneset):
-    expression = read_count_data(expression_data, geneset, calculate_tpm_=True)
-    expression.columns = pd.MultiIndex.from_tuples([("Expression", x[0]) for x in expression.columns])
-    clinical, cols = read_clinical_data(clinical_data, clinical_yaml)
-    data = (clinical
-            .reset_index("case_name")
-            .join(expression, how="left")
-            .set_index("case_name", append=True))
-    data = data.droplevel(0, axis=0)
-    return data, cols
+# l1_ratio = float(sys.argv[1])
+# torch.manual_seed(15370764774595565096)
 
 
 def make_splits(data, seed):
@@ -65,125 +56,498 @@ def split(data, seed):
     train, val, test = [data[x] for x in splits]
     return train, val, test, splits
 
-# %% Read data.
-geneset = GeneSet("Homo_sapiens.GRCh38.113.chr.gtf.gz",
-                  include=["gene", "transcript", "exon"])
-data, cols = read_data(expression_data="unstranded_and_tpm.tsv",
-                       clinical_data="TARGET/clinical.tsv",
-                       clinical_yaml="Data/Clinical/variables.yaml",
-                       geneset=geneset)
-drop_list = ["TARGET-20-PAPXVK"]  # Filtered due to multiple listed events
-data = data.drop(drop_list)
-del geneset
-# %% Prepare expression.
 
-expression = data.Expression
-# expression = np.zeros((1610, 19551))  # To test when expression is left as zero.
-expression = np.stack([np.array(expression), np.zeros(expression.shape)], axis=0)
-expression = tensor(expression, dtype=float32).permute(1, 0, 2)
+# %% Read data.
+def set_microarray_genes(microarray_data, rnaseq_data):
+    missing = (set(rnaseq_data.Expression.columns)
+               - set(microarray_data.Expression.columns))
+    addon = pd.DataFrame(np.zeros((microarray_data.shape[0], len(missing))),
+                         columns=pd.MultiIndex.from_product([["Expression"], missing]),
+                         index=microarray_data.index)
+    microarray_data = microarray_data.join(addon).loc[:, rnaseq_data.columns]
+    return microarray_data
+
+
+def set_intersect_of_genes(*args):
+    genesets = [set(dataset.Expression.columns) for dataset in args]
+    genes = set.intersection(*genesets)
+    for dataset in args:
+        removers = set(dataset.Expression.columns) - genes
+        removers = [("Expression", gene) for gene in removers]
+        dataset.drop(removers, axis=1, inplace=True)
+    return
+
+# def add_missing_genes(*args):
+#     genes = {gene for dataset in args for gene in dataset.columns}
+#     new_data = []
+#     for dataset in args:
+#         missing = genes - dataset.columns
+#         addon = pd.DataFrame(np.zeros((dataset.shape[0], len(missing))),
+#                              columns=pd.MultiIndex.from_product([["Expression"], missing]),
+#                              index=dataset.index)
+#         new_data.append(dataset.join(addon))
+#     return new_data
+
+
+geneset = GeneSet("Homo_sapiens.GRCh38.113.chr.gtf.gz", include=["gene", "transcript", "exon"])
+
+## Read TARGET-AML RNAseq data.
+# target_aml, cols = read_rna_dataset(expression_data="Data/TARGET_AML_gene_counts/unstranded_and_tpm.tsv",
+#                                     clinical_data="Data/TARGET_AML_gene_counts/clinical.tsv",
+#                                     clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
+#                                     geneset=geneset,
+#                                     median_tpm_above_quantile=0.95)
+
+target_aml, cols = read_rna_dataset(expression_data="Data/TARGET_AML_gene_counts/second_stranded_counts.tsv",
+                                    clinical_data="Data/TARGET_AML_gene_counts/clinical.tsv",
+                                    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
+                                    geneset=geneset,
+                                    median_tpm_above_quantile=.99,
+                                    minimum_expression=(10, .10),
+                                    variance_cutoff=None,
+                                    return_tpm=False)
+# target_aml = read_count_data2("Data/TARGET_AML_gene_counts/raw_counts.tsv",
+#                               geneset)
+# target_aml = filter_rna_dataset(target_aml, geneset, .95)
+drop_list = ["TARGET-20-PAPXVK"]  # Filtered due to multiple listed events
+target_aml = target_aml.drop(drop_list)
+# genes = set(target_aml.Expression.columns)
+all_group_labels = [0]*target_aml.shape[0]
+
+## Read TCGA-AML microarray data.
+tcga_aml, _ = read_microarray_dataset(
+    expression_data="Data/TCGA_LAML_arrays/tcga_laml.microarray_data.tsv",
+    clinical_data="Data/TCGA_LAML_arrays/tcga-aml.clinical.homogenized.incomplete.tsv",
+    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
+    geneset=geneset)
+# tcga_aml = set_microarray_genes(tcga_aml, target_aml)
+all_group_labels += [1]*tcga_aml.shape[0]
+
+# Read GSE37642 HGU133plus2 data.
+gse37642_hgu133plus2, _ = read_gse37642(
+    input_file="Data/GSE37642/GSE37642.hgu133plus2.expression.tsv",
+    clinical_data="/home/tyler/Documents/Projects/ML/Data/GSE37642/GSE37642_Homogenized_Survival_data.tsv",
+    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml"
+    )
+# gse37642_hgu133plus2 = set_microarray_genes(gse37642_hgu133plus2, target_aml)
+gse37642_hgu133plus2.dropna(subset=[("Outcomes", "Vital Status"), ("Outcomes", "Overall Survival Time in Days")],
+                            inplace=True)
+all_group_labels += [1]*gse37642_hgu133plus2.shape[0]
+
+# Read GSE37642 HGU133plusA data.
+gse37642_hgu133a, _ = read_gse37642(
+    input_file="Data/GSE37642/GSE37642.hgu133A.expression.tsv",
+    clinical_data="/home/tyler/Documents/Projects/ML/Data/GSE37642/GSE37642_Homogenized_Survival_data.tsv",
+    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml"
+    )
+# gse37642_hgu133a = set_microarray_genes(gse37642_hgu133a, target_aml)
+gse37642_hgu133a.dropna(subset=[("Outcomes", "Vital Status"), ("Outcomes", "Overall Survival Time in Days")],
+                        inplace=True)
+all_group_labels += [1]*gse37642_hgu133a.shape[0]
+
+set_intersect_of_genes(target_aml, tcga_aml, gse37642_hgu133plus2, gse37642_hgu133a)
+target_aml = replace_with_tpm(target_aml, geneset)
+
+
+rna_data = pd.concat([target_aml], axis=0)
+ma_data = pd.concat([tcga_aml, gse37642_hgu133plus2, gse37642_hgu133a], axis=0)
+data = pd.concat([rna_data, ma_data], axis=0)
+ids = list(data.index)
+
+del geneset
+
+
+# %% Prepare expression.
+rna_expression = np.stack([np.array(rna_data.Expression), np.zeros(rna_data.Expression.shape)],
+                          axis=0)
+ma_expression = np.stack([np.zeros(ma_data.Expression.shape), np.array(ma_data.Expression)],
+                          axis=0)
+all_expression = np.concat([rna_expression, ma_expression], axis=1)
+all_expression = tensor(all_expression, dtype=float32).permute(1, 0, 2)
+
 
 # %% Prepare covariates.
-categoricals = data["Covariates"][[x for x in cols["Covariates"]
-                                   if cols["Covariates"][x] == "categorical"]]
-code_categoricals(categoricals)
-categoricals = tensor(categoricals.to_numpy(), dtype=torch.int32)
+categorical_vars = [x for x in cols["Covariates"] if cols["Covariates"][x] == "categorical"]
+all_categoricals = data["Covariates"][categorical_vars]
+for x in all_categoricals:
+    all_categoricals[x] = pd.Categorical(all_categoricals[x])
+code_categoricals(all_categoricals)
+all_categoricals = tensor(all_categoricals.to_numpy(), dtype=torch.int32)
 
-non_categoricals = data["Covariates"][[x for x in cols["Covariates"]
+all_non_categoricals = data["Covariates"][[x for x in cols["Covariates"]
                                        if cols["Covariates"][x] != "categorical"]]
-non_categoricals = tensor(add_nan_mask_stack(non_categoricals), dtype=float32)
-non_categoricals = non_categoricals.permute(1, 0, 2)
+all_non_categoricals = tensor(add_nan_mask_stack(all_non_categoricals), dtype=float32)
+all_non_categoricals = all_non_categoricals.permute(1, 0, 2)
+
 
 # %% Prepare outcomes.
-outcomes = data.Outcomes
-outcomes.columns = ["event", "duration"]
-outcomes = outcomes[["duration", "event"]]
-outcomes.loc[:, "event"] = [int(x == "Dead") for x in outcomes.event]
+all_outcomes = data.Outcomes
+all_outcomes.columns = ["event", "duration"]
+all_outcomes = all_outcomes[["duration", "event"]]
+all_outcomes.loc[:, "event"] = [int(x == "Dead") for x in all_outcomes.event]
 
 
-# %% Split data into test, train, and validation.
-groups = ["train", "validation", "test", "splits"]
-split_to_dict = lambda x: dict(zip(groups, split(x, 123)))
-expression = split_to_dict(expression)
-categoricals = split_to_dict(categoricals)
-non_categoricals = split_to_dict(non_categoricals)
-outcomes = split_to_dict(outcomes)
+# %% Split test data.
+expression = dict()
+categoricals = dict()
+non_categoricals = dict()
+outcomes = dict()
+set_ids = dict()
+group_labels = dict()
+expression_table = dict()
 
-outcomes["train"] = prepare_outcomes(outcomes["train"])
-outcomes["validation"] = prepare_outcomes(outcomes["validation"])
+(expression["train"], expression["test"],
+ categoricals["train"], categoricals["test"],
+ non_categoricals["train"], non_categoricals["test"],
+ outcomes["train"], outcomes["test"],
+ set_ids["train"], set_ids["test"],
+ group_labels["train"], group_labels["test"],
+ expression_table["train"], expression_table["test"]) = (
+    train_test_split(all_expression, all_categoricals, all_non_categoricals, all_outcomes,
+                     ids, all_group_labels, data.Expression,
+                     test_size=0.2, random_state=0, stratify=all_group_labels)
+    )
+
+outcomes["train"] = prepare_outcomes(np.array(outcomes["train"]))
 outcomes["test"] = outcomes["test"].T.astype(float)
+
+# # %% Split data into test, train, and validation.
+# groups = ["train", "validation", "test", "splits"]
+# split_to_dict = lambda x: dict(zip(groups, split(x, 123)))
+# expression = split_to_dict(expression)
+# categoricals = split_to_dict(categoricals)
+# non_categoricals = split_to_dict(non_categoricals)
+# outcomes = split_to_dict(outcomes)
+#
+# outcomes["train"] = prepare_outcomes(outcomes["train"])
+# outcomes["validation"] = prepare_outcomes(outcomes["validation"])
+# outcomes["test"] = outcomes["test"].T.astype(float)
+
+
+# %% Cross validation.
+def calculate_zscores(data):
+    data = (data - data.mean()) / data.std()
+    return data
+
+
+def normalize_alpha_inputs(input_data, labels):
+    data = input_data.copy()
+    data["int_dex"] = range(data.shape[0])
+    data.set_index("int_dex", append=True, inplace=True)
+    labels = np.array(labels, dtype=bool)
+    rna = calculate_zscores(data.loc[~ labels])
+    arrays = calculate_zscores(data.loc[labels])
+    data = pd.concat([rna, arrays])
+    data.sort_index(level=1, inplace=True)
+    data = data.droplevel(level=1)
+    return data
+
+
+def cross_validation_run(expression_data, categorical_data, non_categorical_data,
+                         outcome_data, group_data, covariate_cardinality,
+                         original_data, l1_ratio=1, iterate_alphas=True):
+
+    kf = StratifiedKFold(n_splits=5, random_state=0, shuffle=True)
+    results = dict()
+
+    for i, (train_fold, val_fold) in enumerate(kf.split(expression_data, group_data)):
+        print(f"Running fold {i}...")
+        results[i] = dict()
+        print(f"    Preparing input data...")
+        expression_train = expression_data[train_fold]
+        categoricals_train = categorical_data[train_fold]
+        non_categoricals_train = non_categorical_data[train_fold]
+        outcomes_train_dur = outcome_data[0][train_fold]
+        outcomes_train_event = outcome_data[1][train_fold]
+        group_train = [group_data[i] for i in train_fold]
+        alpha_data = normalize_alpha_inputs(original_data.iloc[train_fold], group_train)
+
+        print(f"    Preparing validation data...")
+        expression_val = expression_data[val_fold]
+        categoricals_val = categorical_data[val_fold]
+        non_categoricals_val = non_categorical_data[val_fold]
+        outcomes_val_dur = outcome_data[0][val_fold]
+        outcomes_val_event = outcome_data[1][val_fold]
+
+        if iterate_alphas:
+            print(f"    Calculating lasso penalties...")
+            alpha_table = test_lasso_penalties(alpha_data,
+                                               (outcomes_train_dur, outcomes_train_event),
+                                               l1_ratio=l1_ratio)
+            geneset = get_non_zero_genes(alpha_table)
+        else:
+            geneset = {0: (slice(None), list(alpha_data.columns))}
+        print("Running validation...")
+        for alpha, (index, genes) in tqdm(geneset.items()):
+            results[i][alpha] = dict()
+            results[i][alpha]["genes"] = ",".join(genes)
+
+            print(f"Preparing training fold for alpha={alpha}...")
+            outcomes_train = (outcomes_train_dur, outcomes_train_event)
+            outcomes_val = (outcomes_val_dur, outcomes_val_event)
+
+            expression_train_subset = expression_train[:, :, index]
+            expression_val_subset = expression_val[:, :, index]
+            train_args = (expression_train_subset, categoricals_train, non_categoricals_train)
+            val_args = (expression_val_subset, categoricals_val, non_categoricals_val)
+
+            network = SuperModel(n_genes=expression_train_subset.shape[-1],
+                                 n_tech=2,
+                                 n_expansion=4,
+                                 n_clinical=categoricals_train.shape[-1] +
+                                            non_categoricals_train.shape[-1],
+                                 covariate_cardinality=covariate_cardinality,
+                                 embedding_dims={"race": 3, "ethnicity": 3,
+                                                 "interaction": 3,
+                                                 "protocol": 3},
+                                 shrinkage_factor=10,
+                                 minimum_size=10,
+                                 final_size=1)
+            model = CoxPH(network, tt.optim.Adam)
+
+
+            batch_size = 95
+            print("Calculating learning rate...")
+            lrfinder = model.lr_finder(train_args, outcomes_train, batch_size,
+                                       tolerance=10)
+            # lrfinder.plot()
+            # plt.show()
+            lr_optim = lrfinder.get_best_lr()
+            model.optimizer.set_lr(lr_optim)
+
+            epochs = 360
+            callbacks = []
+            # callbacks = [tt.callbacks.EarlyStopping(patience=30)]
+            eps = 0.005
+            verbose = True
+            losses = []
+
+            print("Running epochs...")
+            for epoch in range(epochs):
+                log = model.fit(train_args, outcomes_train, batch_size,
+                                epochs=1,
+                                verbose=verbose)
+                log = log.to_pandas()
+                losses.append(log.train_loss.iloc[-1])
+                if len(losses) < 10:
+                    continue
+                if np.var(losses[-10:]) < eps:
+                    break
+
+            results[i][alpha]["epochs"] = epoch
+            # log = model.fit(train_args, outcomes_train, batch_size, epochs, callbacks, verbose,)
+            # val_data=(val_args, outcomes_val), val_batch_size=batch_size)
+
+            print("Evaluating performance...")
+            results[i][alpha]["pll"] = model.partial_log_likelihood(val_args,
+                                                              outcomes_val).mean()
+            model.compute_baseline_hazards()
+
+            surv = model.predict_surv_df(val_args)
+
+            outcomes_val = np.array(outcomes_val)
+
+            ev = EvalSurv(surv, outcomes_val[0], outcomes_val[1], censor_surv="km")
+            results[i][alpha]["ctd"] = ev.concordance_td()
+
+            time_grid = np.linspace(outcomes_val[0].min(), outcomes_val[0].max(),
+                                    100)
+            brier_scores = ev.brier_score(time_grid)
+            results[i][alpha]["ibs"] = (simpson(y=brier_scores.values, x=brier_scores.index)
+                                        / (brier_scores.index[-1] - brier_scores.index[0]))
+
+            # ev.integrated_nbll(time_grid)
+
+            predictions = [float(x[0]) for x in model.predict(val_args)]
+            km_test_df = pd.DataFrame(zip(outcomes_val[0], outcomes_val[1], predictions),
+                                      columns=["duration", "event", "risk"])
+            print("Calculating survival split...")
+            optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
+            risk_splits = np.cumulative_sum(optimal_splits.x)
+            # plot_survival_curves(km_test_df)
+            logranks = iterate_logrank_tests(km_test_df)
+            results[i][alpha]["risk_splits"] = risk_splits
+            results[i][alpha]["km_logrank"] = logranks
+            print("Done")
+
+        # outcomes_train = (outcomes_train_dur, outcomes_train_event)
+        # outcomes_val = (outcomes_val_dur, outcomes_val_event)
+        #
+        # train_args = (expression_train, categoricals_train, non_categoricals_train)
+        # val_args = (expression_val, categoricals_val, non_categoricals_val)
+        #
+        # network = SuperModel(n_genes=expression_train.shape[-1],
+        #                      n_tech=2,
+        #                      n_expansion=4,
+        #                      n_clinical=categoricals_train.shape[-1] +
+        #                                 non_categoricals_train.shape[-1],
+        #                      covariate_cardinality=covariate_cardinality,
+        #                      embedding_dims={"race": 3, "ethnicity": 3, "interaction": 3,
+        #                                      "protocol": 3},
+        #                      shrinkage_factor=10,
+        #                      minimum_size=10,
+        #                      final_size=1)
+        # model = CoxPH(network, tt.optim.Adam)
+        #
+        # batch_size = 95
+        # lrfinder = model.lr_finder(train_args, outcomes_train, batch_size, tolerance=10)
+        # # lrfinder.plot()
+        # # plt.show()
+        # lr_optim = lrfinder.get_best_lr()
+        # print(lr_optim)
+        # model.optimizer.set_lr(lr_optim)
+        #
+        # epochs = 120
+        # callbacks = [tt.callbacks.EarlyStopping(patience=30)]
+        # verbose = True
+        #
+        # log = model.fit(train_args, outcomes_train, batch_size, epochs, callbacks, verbose,
+        #                 val_data=(val_args, outcomes_val), val_batch_size=batch_size)
+        # results[i]["pll"] = model.partial_log_likelihood(val_args, outcomes_val).mean()
+        # model.compute_baseline_hazards()
+        #
+        # surv = model.predict_surv_df(val_args)
+        #
+        # outcomes_val = np.array(outcomes_val)
+        #
+        # ev = EvalSurv(surv, outcomes_val[0], outcomes_val[1], censor_surv="km")
+        # results[i]["ctd"] = ev.concordance_td()
+        #
+        # time_grid = np.linspace(outcomes_val[0].min(), outcomes_val[0].max(),
+        #                         100)
+        # brier_scores = ev.brier_score(time_grid)
+        # results[i]["ibs"] = (simpson(y=brier_scores.values, x=brier_scores.index)
+        #                      / (brier_scores.index[-1] - brier_scores.index[0]))
+        #
+        # # ev.integrated_nbll(time_grid)
+        #
+        # predictions = [float(x[0]) for x in model.predict(val_args)]
+        # km_test_df = pd.DataFrame(zip(outcomes_val[0], outcomes_val[1], predictions),
+        #                           columns=["duration", "event", "risk"])
+        # optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
+        # risk_splits = np.cumulative_sum(optimal_splits.x)
+        # # plot_survival_curves(km_test_df)
+        # logranks = iterate_logrank_tests(km_test_df)
+        # results[i]["risk_splits"] = risk_splits
+        # results[i]["km_logrank"] = logranks
+    return results
+
+
+def make_results_table(results):
+    fields = ["epochs", "pll", "ctd", "ibs"]
+    parsed = []
+    for fold, alpha_dict in results.items():
+        for alpha, result_dict in alpha_dict.items():
+            entry = ([fold, alpha, len(result_dict["genes"].split(","))]
+                     + [result_dict[x] for x in fields])
+            entry += [tuple(sorted(result_dict["risk_splits"]))]
+            print(fold, alpha, result_dict["km_logrank"].keys())
+            entry += [result_dict["km_logrank"][tuple(x)].p_value
+                      if tuple(x) in result_dict["km_logrank"] else None
+                      for x in ["AB", "BC", "AC"]]
+            parsed.append(entry)
+    cols = ["fold", "alpha", "gene_count", *fields, "risk_splits", "km_logrank_AB",
+            "km_logrank_BC", "km_logrank_AC"]
+    table = pd.DataFrame(parsed, columns=cols)
+    table["group"] = [i for _ in range(5) for i in ascii_uppercase[:19]]
+    table.set_index(["fold", "group", "alpha"], inplace=True)
+    return parsed, table
+
+
+def make_mean_results_table(results_table):
+    table = results_table[["gene_count", "pll", "epochs", "ctd", "ibs"]].groupby("group").mean()
+    return table
+
+
+cv_results = cross_validation_run(
+    expression_data=expression["train"],
+    categorical_data=categoricals["train"],
+    non_categorical_data=non_categoricals["train"],
+    outcome_data=outcomes["train"],
+    group_data=group_labels["train"],
+    covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
+    original_data=expression_table["train"]
+    )
 
 
 # %% Define network and model.
-# network = SuperModel(n_genes=expression["train"].shape[-1],
-#                      n_tech=2,
-#                      n_expansion=4,
-#                      n_clinical=36,
-#                      covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 5},
-#                      embedding_dims={"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3},
-#                      shrinkage_factor=10,
-#                      minimum_size=10,
-#                      final_size=1)
-#
-# model = CoxPH(network, tt.optim.Adam)
-#
-# train_args = (expression["train"], categoricals["train"], non_categoricals["train"])
+network = SuperModel(n_genes=expression["train"].shape[-1],
+                     n_tech=2,
+                     n_expansion=4,
+                     n_clinical=35,
+                     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 6},
+                     embedding_dims={"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3},
+                     shrinkage_factor=10,
+                     minimum_size=10,
+                     final_size=1)
+
+model = CoxPH(network, tt.optim.Adam)
+
+train_args = (expression["train"], categoricals["train"], non_categoricals["train"])
 # validation_args = (expression["validation"], categoricals["validation"], non_categoricals["validation"])
-# test_args = (expression["test"], categoricals["test"], non_categoricals["test"])
-#
-#
-# # %% Run the model.
-# batch_size = 161
-# lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
-# # lrfinder.plot()
-# # plt.show()
-#
-# lr_optim = lrfinder.get_best_lr()
-# model.optimizer.set_lr(0.0001)
-#
-# epochs = 60
-# # callbacks = [tt.callbacks.EarlyStopping()]
-# callbacks = []
-# verbose = True
-#
-# log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose,
-#                 val_data=(validation_args, outcomes["validation"]),
-#                 val_batch_size=batch_size)
-# # log.plot()
-# # plt.show()
-#
-#
-# # %% Evaluate the model.
+test_args = (expression["test"], categoricals["test"], non_categoricals["test"])
+
+
+# %% Run the model.
+batch_size = 190
+lrfinder = model.lr_finder(train_args, outcomes["train"], batch_size, tolerance=10)
+# lrfinder.plot()
+# plt.show()
+
+lr_optim = lrfinder.get_best_lr()
+model.optimizer.set_lr(lr_optim)
+
+epochs = 30
+# callbacks = [tt.callbacks.EarlyStopping()]
+callbacks = []
+verbose = True
+
+log = model.fit(train_args, outcomes["train"], batch_size, epochs, callbacks, verbose),
+                # val_data=(validation_args, outcomes["validation"]),
+                # val_batch_size=batch_size)
+# log.plot()
+# plt.show()
+
+
+# %% Evaluate the model.
 # model.partial_log_likelihood(validation_args, outcomes["validation"]).mean()
-# model.compute_baseline_hazards()
-#
-# surv = model.predict_surv_df(test_args)
-# # surv.plot()
-# # plt.ylabel("S(t | x)")
-# # plt.xlabel("Time")
-# # plt.show()
-#
-# ev = EvalSurv(surv, outcomes["test"][0], outcomes["test"][1], censor_surv="km")
-# ev.concordance_td()
-#
-# time_grid = np.linspace(outcomes["test"][0].min(), outcomes["test"].max(), 100)
-# # ev.brier_score(time_grid).plot()
-# # plt.show()
-#
-# brier_scores = ev.brier_score(time_grid)
-# ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
-#        / (brier_scores.index[-1] - brier_scores.index[0]))
-#
-# # ev.integrated_nbll(time_grid)
-#
-# predictions = [float(x[0]) for x in model.predict(test_args)]
-# km_test_df = pd.DataFrame(zip(*outcomes["test"], predictions),
-#                           columns=["duration", "event", "risk"])
-#
-#
-# # %% Survival partitioning.
-# optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
-# risk_splits = np.cumulative_sum(optimal_splits.x)
-# plot_survival_curves(km_test_df)
+outcomes["test"] = [tensor(outcomes["test"].iloc[0].to_numpy(), dtype=float32),
+                    tensor(outcomes["test"].iloc[1].to_numpy(), dtype=float32)]
+model.partial_log_likelihood(test_args, outcomes["test"]).mean()
+model.compute_baseline_hazards()
+
+surv = model.predict_surv_df(test_args)
+# surv.plot()
+# plt.ylabel("S(t | x)")
+# plt.xlabel("Time")
+# plt.show()
+
+outcomes["test"] = [x.numpy() for x in outcomes["test"]]
+ev = EvalSurv(surv, outcomes["test"][0], outcomes["test"][1],
+              censor_surv="km")
+ev.concordance_td()  #
+
+time_grid = np.linspace(outcomes["test"][0].min(),
+                        outcomes["test"][0].max(),
+                        100)
+ev.brier_score(time_grid).plot()
+plt.show()
+
+brier_scores = ev.brier_score(time_grid)
+ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
+       / (brier_scores.index[-1] - brier_scores.index[0]))
+
+# ev.integrated_nbll(time_grid)
+
+predictions = [float(x[0]) for x in model.predict(test_args)]
+km_test_df = pd.DataFrame(zip(*outcomes["test"], predictions),
+                          columns=["duration", "event", "risk"])
+
+
+# %% Survival partitioning.
+optimal_splits = optimize_survival_splits(km_test_df, n_groups=3)
+risk_splits = np.cumulative_sum(optimal_splits.x)
+plot_survival_curves(km_test_df)
 
 
 # %% Do Elastic Net to test gene subsets.
@@ -200,32 +564,33 @@ lsc17 = ["ENSG00000088305", "ENSG00000130584", "ENSG00000205978", "ENSG000001288
          "ENSG00000088882", "ENSG00000120833", "ENSG00000095932", "ENSG00000134531",
          "ENSG00000174059", "ENSG00000196139", "ENSG00000205336", "ENSG00000166681",]
         # "ENSG00000226777"]
-gene_id_dict = {'ENSG00000104341': 'ENSG00000104341.17',
-                'ENSG00000159228': 'ENSG00000159228.13',
-                'ENSG00000088305': 'ENSG00000088305.18',
-                'ENSG00000120833': 'ENSG00000120833.14',
-                'ENSG00000129187': 'ENSG00000129187.14',
-                'ENSG00000131747': 'ENSG00000131747.15',
-                'ENSG00000138722': 'ENSG00000138722.10',
-                'ENSG00000166681': 'ENSG00000166681.14',
-                'ENSG00000205336': 'ENSG00000205336.14',
-                'ENSG00000128040': 'ENSG00000128040.11',
-                'ENSG00000196139': 'ENSG00000196139.14',
-                'ENSG00000088882': 'ENSG00000088882.8',
-                'ENSG00000103222': 'ENSG00000103222.20',
-                'ENSG00000113657': 'ENSG00000113657.13',
-                'ENSG00000105810': 'ENSG00000105810.10',
-                'ENSG00000095932': 'ENSG00000095932.7',
-                'ENSG00000130584': 'ENSG00000130584.12',
-                'ENSG00000005381': 'ENSG00000005381.8',
-                'ENSG00000128805': 'ENSG00000128805.15',
-                'ENSG00000134531': 'ENSG00000134531.10',
-                'ENSG00000205978': 'ENSG00000205978.6',
-                'ENSG00000174059': 'ENSG00000174059.17'}
+gene_id_dict = {"ENSG00000104341": "ENSG00000104341.17",
+                "ENSG00000159228": "ENSG00000159228.13",
+                "ENSG00000088305": "ENSG00000088305.18",
+                "ENSG00000120833": "ENSG00000120833.14",
+                "ENSG00000129187": "ENSG00000129187.14",
+                "ENSG00000131747": "ENSG00000131747.15",
+                "ENSG00000138722": "ENSG00000138722.10",
+                "ENSG00000166681": "ENSG00000166681.14",
+                "ENSG00000205336": "ENSG00000205336.14",
+                "ENSG00000128040": "ENSG00000128040.11",
+                "ENSG00000196139": "ENSG00000196139.14",
+                "ENSG00000088882": "ENSG00000088882.8",
+                "ENSG00000103222": "ENSG00000103222.20",
+                "ENSG00000113657": "ENSG00000113657.13",
+                "ENSG00000105810": "ENSG00000105810.10",
+                "ENSG00000095932": "ENSG00000095932.7",
+                "ENSG00000130584": "ENSG00000130584.12",
+                "ENSG00000005381": "ENSG00000005381.8",
+                "ENSG00000128805": "ENSG00000128805.15",
+                "ENSG00000134531": "ENSG00000134531.10",
+                "ENSG00000205978": "ENSG00000205978.6",
+                "ENSG00000174059": "ENSG00000174059.17"}
 aders5 = [gene_id_dict[x] for x in aders5]
 plsc6 = [gene_id_dict[x] for x in plsc6]
 lsc17 = [gene_id_dict[x] for x in lsc17]
 non_zero_genes.update({"ADE-RS5": aders5, "pLSC6": plsc6, "LSC17": lsc17})
+
 
 def test_network(expression_data, alpha):
     group_name = f"{alpha:.3f}" if isinstance(alpha, float) else alpha
@@ -305,9 +670,9 @@ def test_network(expression_data, alpha):
         kmf.fit(group_data.duration, event_observed=group_data.event, label=group)
         kmf.plot_survival_function(ci_show=True)
 
-    plt.title('Kaplan-Meier Survival Curves')
-    plt.xlabel('Time')
-    plt.ylabel('Survival Probability')
+    plt.title("Kaplan-Meier Survival Curves")
+    plt.xlabel("Time")
+    plt.ylabel("Survival Probability")
     plt.legend()
     plt.grid(True)
     plt.savefig(f"{outdir}/kaplan_meier.png")
@@ -338,4 +703,4 @@ for alpha, genes in tqdm(non_zero_genes.items()):
     expression = split_to_dict(expression)
     results = test_network(expression, alpha)
     all_results[alpha] = results
-    plt.close('all')
+    plt.close("all")
