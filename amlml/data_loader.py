@@ -191,7 +191,3 @@ def main(normalization: Callable):
             categoricals, non_categoricals,
             set_ids, group_labels,
             expression_table)
-
-
-(expression, outcomes, categoricals, non_categoricals, set_ids, group_labels,
- expression_table) = main(prepare_zscore_normed)
