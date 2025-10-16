@@ -180,7 +180,7 @@ def split_test_data(data, all_expression, all_outcomes, all_categoricals,
             expression_table)
 
 
-def main(normalization: Callable):
+def main_loader(normalization: Callable):
     data = read_model_data()
     prepared = prepare_data(*data[:4], normalization=normalization)
     (expression, outcomes,
