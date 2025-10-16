@@ -1,16 +1,17 @@
 
 import os
 from string import ascii_uppercase
-# import sys
 
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+from pandas import IndexSlice as idx
+import plotly.graph_objects as go
+import plotly.express as px
 from scipy.integrate import simpson
-from sklearn.model_selection import StratifiedKFold, train_test_split
+from sklearn.model_selection import StratifiedKFold
 from tqdm import tqdm
 
-import torch
 from torch import float32, tensor
 import torchtuples as tt
 
@@ -18,210 +19,14 @@ from lifelines import KaplanMeierFitter
 from pycox.models import CoxPH
 from pycox.evaluation import EvalSurv
 
-from amlml.survival_data import prepare_outcomes, code_categoricals, add_nan_mask_stack
-from amlml.rna_data import (read_count_data, read_count_data2, filter_rna_dataset,
-                            read_rna_dataset, read_samples, calculate_tpm, replace_with_tpm)
-from amlml.microarray_data import read_microarray_dataset, read_gse37642
 from amlml.parallel_modelling import SuperModel
-from amlml.gene_set import GeneSet
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
-
-# l1_ratio = float(sys.argv[1])
-# torch.manual_seed(15370764774595565096)
+from amlml.data_loader import main_loader, prepare_supermodel_data
 
 
-def make_splits(data, seed):
-    split_gen = np.random.default_rng(seed)
-    train = split_gen.choice(range(data.shape[0]),
-                             size=int(0.6*data.shape[0]),
-                             replace=False)
-    # train = split_gen.choice(range(data.shape[0]),
-    #                          size=int(0.8*data.shape[0]),
-    #                          replace=False)
-    remainder = set(range(data.shape[0])) - set(train)
-    val = split_gen.choice(list(remainder),
-                           size=int(0.5*len(remainder)),
-                           replace=False)
-    # val = split_gen.choice(list(remainder),
-    #                        size=0,
-    #                        replace=False)
-    test = np.array(list(remainder - set(val)))
-    return train, val, test
-
-def split(data, seed):
-    if isinstance(data, pd.DataFrame):
-        data = np.array(data)
-    splits = make_splits(data, seed)
-    train, val, test = [data[x] for x in splits]
-    return train, val, test, splits
-
-
-# %% Read data.
-def set_microarray_genes(microarray_data, rnaseq_data):
-    missing = (set(rnaseq_data.Expression.columns)
-               - set(microarray_data.Expression.columns))
-    addon = pd.DataFrame(np.zeros((microarray_data.shape[0], len(missing))),
-                         columns=pd.MultiIndex.from_product([["Expression"], missing]),
-                         index=microarray_data.index)
-    microarray_data = microarray_data.join(addon).loc[:, rnaseq_data.columns]
-    return microarray_data
-
-
-def set_intersect_of_genes(*args):
-    genesets = [set(dataset.Expression.columns) for dataset in args]
-    genes = set.intersection(*genesets)
-    for dataset in args:
-        removers = set(dataset.Expression.columns) - genes
-        removers = [("Expression", gene) for gene in removers]
-        dataset.drop(removers, axis=1, inplace=True)
-    return
-
-# def add_missing_genes(*args):
-#     genes = {gene for dataset in args for gene in dataset.columns}
-#     new_data = []
-#     for dataset in args:
-#         missing = genes - dataset.columns
-#         addon = pd.DataFrame(np.zeros((dataset.shape[0], len(missing))),
-#                              columns=pd.MultiIndex.from_product([["Expression"], missing]),
-#                              index=dataset.index)
-#         new_data.append(dataset.join(addon))
-#     return new_data
-
-
-geneset = GeneSet("Homo_sapiens.GRCh38.113.chr.gtf.gz", include=["gene", "transcript", "exon"])
-
-## Read TARGET-AML RNAseq data.
-# target_aml, cols = read_rna_dataset(expression_data="Data/TARGET_AML_gene_counts/unstranded_and_tpm.tsv",
-#                                     clinical_data="Data/TARGET_AML_gene_counts/clinical.tsv",
-#                                     clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
-#                                     geneset=geneset,
-#                                     median_tpm_above_quantile=0.95)
-
-target_aml, cols = read_rna_dataset(expression_data="Data/TARGET_AML_gene_counts/second_stranded_counts.tsv",
-                                    clinical_data="Data/TARGET_AML_gene_counts/clinical.tsv",
-                                    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
-                                    geneset=geneset,
-                                    median_tpm_above_quantile=.99,
-                                    minimum_expression=(10, .10),
-                                    variance_cutoff=None,
-                                    return_tpm=False)
-# target_aml = read_count_data2("Data/TARGET_AML_gene_counts/raw_counts.tsv",
-#                               geneset)
-# target_aml = filter_rna_dataset(target_aml, geneset, .95)
-drop_list = ["TARGET-20-PAPXVK"]  # Filtered due to multiple listed events
-target_aml = target_aml.drop(drop_list)
-# genes = set(target_aml.Expression.columns)
-all_group_labels = [0]*target_aml.shape[0]
-
-## Read TCGA-AML microarray data.
-tcga_aml, _ = read_microarray_dataset(
-    expression_data="Data/TCGA_LAML_arrays/tcga_laml.microarray_data.tsv",
-    clinical_data="Data/TCGA_LAML_arrays/tcga-aml.clinical.homogenized.incomplete.tsv",
-    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml",
-    geneset=geneset)
-# tcga_aml = set_microarray_genes(tcga_aml, target_aml)
-all_group_labels += [1]*tcga_aml.shape[0]
-
-# Read GSE37642 HGU133plus2 data.
-gse37642_hgu133plus2, _ = read_gse37642(
-    input_file="Data/GSE37642/GSE37642.hgu133plus2.expression.tsv",
-    clinical_data="/home/tyler/Documents/Projects/ML/Data/GSE37642/GSE37642_Homogenized_Survival_data.tsv",
-    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml"
-    )
-# gse37642_hgu133plus2 = set_microarray_genes(gse37642_hgu133plus2, target_aml)
-gse37642_hgu133plus2.dropna(subset=[("Outcomes", "Vital Status"), ("Outcomes", "Overall Survival Time in Days")],
-                            inplace=True)
-all_group_labels += [1]*gse37642_hgu133plus2.shape[0]
-
-# Read GSE37642 HGU133plusA data.
-gse37642_hgu133a, _ = read_gse37642(
-    input_file="Data/GSE37642/GSE37642.hgu133A.expression.tsv",
-    clinical_data="/home/tyler/Documents/Projects/ML/Data/GSE37642/GSE37642_Homogenized_Survival_data.tsv",
-    clinical_yaml="Data/TARGET_AML_gene_counts/Clinical/variables.yaml"
-    )
-# gse37642_hgu133a = set_microarray_genes(gse37642_hgu133a, target_aml)
-gse37642_hgu133a.dropna(subset=[("Outcomes", "Vital Status"), ("Outcomes", "Overall Survival Time in Days")],
-                        inplace=True)
-all_group_labels += [1]*gse37642_hgu133a.shape[0]
-
-set_intersect_of_genes(target_aml, tcga_aml, gse37642_hgu133plus2, gse37642_hgu133a)
-target_aml = replace_with_tpm(target_aml, geneset)
-
-
-rna_data = pd.concat([target_aml], axis=0)
-ma_data = pd.concat([tcga_aml, gse37642_hgu133plus2, gse37642_hgu133a], axis=0)
-data = pd.concat([rna_data, ma_data], axis=0)
-ids = list(data.index)
-
-del geneset
-
-
-# %% Prepare expression.
-rna_expression = np.stack([np.array(rna_data.Expression), np.zeros(rna_data.Expression.shape)],
-                          axis=0)
-ma_expression = np.stack([np.zeros(ma_data.Expression.shape), np.array(ma_data.Expression)],
-                          axis=0)
-all_expression = np.concat([rna_expression, ma_expression], axis=1)
-all_expression = tensor(all_expression, dtype=float32).permute(1, 0, 2)
-
-
-# %% Prepare covariates.
-categorical_vars = [x for x in cols["Covariates"] if cols["Covariates"][x] == "categorical"]
-all_categoricals = data["Covariates"][categorical_vars]
-for x in all_categoricals:
-    all_categoricals[x] = pd.Categorical(all_categoricals[x])
-code_categoricals(all_categoricals)
-all_categoricals = tensor(all_categoricals.to_numpy(), dtype=torch.int32)
-
-all_non_categoricals = data["Covariates"][[x for x in cols["Covariates"]
-                                       if cols["Covariates"][x] != "categorical"]]
-all_non_categoricals = tensor(add_nan_mask_stack(all_non_categoricals), dtype=float32)
-all_non_categoricals = all_non_categoricals.permute(1, 0, 2)
-
-
-# %% Prepare outcomes.
-all_outcomes = data.Outcomes
-all_outcomes.columns = ["event", "duration"]
-all_outcomes = all_outcomes[["duration", "event"]]
-all_outcomes.loc[:, "event"] = [int(x == "Dead") for x in all_outcomes.event]
-
-
-# %% Split test data.
-expression = dict()
-categoricals = dict()
-non_categoricals = dict()
-outcomes = dict()
-set_ids = dict()
-group_labels = dict()
-expression_table = dict()
-
-(expression["train"], expression["test"],
- categoricals["train"], categoricals["test"],
- non_categoricals["train"], non_categoricals["test"],
- outcomes["train"], outcomes["test"],
- set_ids["train"], set_ids["test"],
- group_labels["train"], group_labels["test"],
- expression_table["train"], expression_table["test"]) = (
-    train_test_split(all_expression, all_categoricals, all_non_categoricals, all_outcomes,
-                     ids, all_group_labels, data.Expression,
-                     test_size=0.2, random_state=0, stratify=all_group_labels)
-    )
-
-outcomes["train"] = prepare_outcomes(np.array(outcomes["train"]))
-outcomes["test"] = outcomes["test"].T.astype(float)
-
-# # %% Split data into test, train, and validation.
-# groups = ["train", "validation", "test", "splits"]
-# split_to_dict = lambda x: dict(zip(groups, split(x, 123)))
-# expression = split_to_dict(expression)
-# categoricals = split_to_dict(categoricals)
-# non_categoricals = split_to_dict(non_categoricals)
-# outcomes = split_to_dict(outcomes)
-#
-# outcomes["train"] = prepare_outcomes(outcomes["train"])
-# outcomes["validation"] = prepare_outcomes(outcomes["validation"])
-# outcomes["test"] = outcomes["test"].T.astype(float)
+(expression, outcomes, categoricals, non_categoricals, set_ids, group_labels,
+ expression_table) = main_loader(prepare_supermodel_data)
 
 
 # %% Cross validation.
