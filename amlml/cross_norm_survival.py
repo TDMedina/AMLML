@@ -20,8 +20,9 @@ from pycox.evaluation import EvalSurv
 from amlml.parallel_modelling import CrossNormalizedModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
-from amlml.data_loader import normalization_generator, prepare_log2_normed
+from amlml.data_loader import normalization_generator, prepare_log2_expression
 from amlml.cross_normalization import zscore_normalize_genes_by_group
+
 
 
 def cross_validation_run(data_generator, covariate_cardinality,
@@ -30,41 +31,45 @@ def cross_validation_run(data_generator, covariate_cardinality,
     norm_method_results = dict()
     for norm_method, data in data_generator:
         print(f"Running normalization method: {norm_method}")
-        (expression, outcomes, categoricals, non_categoricals,
-         _, group_labels, expression_table) = data
+        # (expression, outcomes, categoricals, non_categoricals,
+        #  _, group_labels, expression_table) = data
 
-        expression_data = expression["train"]
-        categorical_data = categoricals["train"]
-        non_categorical_data = non_categoricals["train"]
-        outcome_data = outcomes["train"]
-        group_data = group_labels["train"]
-        original_data = expression_table["train"]
+        # expression_data = expression["train"]
+        # categorical_data = categoricals["train"]
+        # non_categorical_data = non_categoricals["train"]
+        # outcome_data = outcomes["train"]
+        # group_data = group_labels["train"]
+        # original_data = expression_table["train"]
 
         kf = StratifiedKFold(n_splits=5, random_state=0, shuffle=True)
         results = dict()
-        for i, (train_fold, val_fold) in enumerate(kf.split(expression_data, group_data)):
+        for i, (train_fold, val_fold) in enumerate(kf.split(data.expression, data.reference.tech)):
             print(f"Running fold {i}...")
             results[i] = dict()
             print(f"    Preparing input data...")
-            expression_train = expression_data[train_fold]
-            categoricals_train = categorical_data[train_fold]
-            non_categoricals_train = non_categorical_data[train_fold]
-            outcomes_train_dur = outcome_data[0][train_fold]
-            outcomes_train_event = outcome_data[1][train_fold]
-            group_train = [group_data[i] for i in train_fold]
-            alpha_data = zscore_normalize_genes_by_group(original_data.iloc[train_fold], group_train)
+            expression = data.expression[train_fold]
+            categoricals = data.categoricals[train_fold]
+            non_categoricals = data.non_categoricals[train_fold]
+            outcomes_dur = data.outcomes[0][train_fold]
+            outcomes_event = data.outcomes[1][train_fold]
+            tech = data.reference.tech.iloc[train_fold]
+
+            alpha_data = pd.DataFrame(expression,
+                                      index=data.reference.index[train_fold],
+                                      columns=data.reference.columns).join(tech)
+            alpha_data = zscore_normalize_genes_by_group(alpha_data)
 
             print(f"    Preparing validation data...")
-            expression_val = expression_data[val_fold]
-            categoricals_val = categorical_data[val_fold]
-            non_categoricals_val = non_categorical_data[val_fold]
-            outcomes_val_dur = outcome_data[0][val_fold]
-            outcomes_val_event = outcome_data[1][val_fold]
+            expression_val = data.expression[val_fold]
+            categoricals_val = data.categoricals[val_fold]
+            non_categoricals_val = data.non_categoricals[val_fold]
+            outcomes_val_dur = data.outcomes[0][val_fold]
+            outcomes_val_event = data.outcomes[1][val_fold]
 
             if iterate_alphas:
                 print(f"    Calculating lasso penalties...")
                 alpha_table = test_lasso_penalties(alpha_data,
-                                                   (outcomes_train_dur, outcomes_train_event),
+                                                   (outcomes_dur, outcomes_event),
                                                    l1_ratio=l1_ratio,
                                                    alpha_min_ratio=alpha_min_ratio,
                                                    n_alphas=n_alphas,
@@ -78,12 +83,12 @@ def cross_validation_run(data_generator, covariate_cardinality,
                 results[i][alpha]["genes"] = ",".join(genes)
 
                 print(f"Preparing training fold for alpha={alpha}...")
-                outcomes_train = (outcomes_train_dur, outcomes_train_event)
+                outcomes_train = (outcomes_dur, outcomes_event)
                 outcomes_val = (outcomes_val_dur, outcomes_val_event)
 
-                expression_train_subset = expression_train[:, index]
+                expression_train_subset = expression[:, index]
                 expression_val_subset = expression_val[:, index]
-                train_args = (expression_train_subset, categoricals_train, non_categoricals_train)
+                train_args = (expression_train_subset, categoricals, non_categoricals)
                 val_args = (expression_val_subset, categoricals_val, non_categoricals_val)
 
                 network = CrossNormalizedModel(
@@ -91,8 +96,8 @@ def cross_validation_run(data_generator, covariate_cardinality,
                     shrinkage_factor=10,
                     minimum_penultimate_size=10,
                     final_size=1,
-                    n_clinical=categoricals_train.shape[-1] +
-                               non_categoricals_train.shape[-1],
+                    n_clinical=categoricals.shape[-1] +
+                               non_categoricals.shape[-1],
                     covariate_cardinality=covariate_cardinality,
                     embedding_dims={"race": 3, "ethnicity": 3,
                                     "interaction": 3,

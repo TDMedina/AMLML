@@ -1,10 +1,13 @@
 
+import numpy as np
 from numpy import log2, random
 import pandas as pd
+from pandas import IndexSlice as idx
 from plotly.subplots import make_subplots
 import plotly.graph_objects as go
 from qnorm import quantile_normalize
 from scipy.stats import zscore, norm
+
 
 def by_sample(func):
     def flipper(*args, **kwargs):
@@ -13,7 +16,7 @@ def by_sample(func):
     return flipper
 
 
-def log2_transform(data, shift_sub1=False, is_log_transformed=False):
+def log2_transform(data: pd.DataFrame, shift_sub1=False, is_log_transformed=False):
     if is_log_transformed and not shift_sub1:
         return data
     if is_log_transformed:
@@ -26,6 +29,18 @@ def log2_transform(data, shift_sub1=False, is_log_transformed=False):
 
 def zscore_normalize(data):
     data = pd.DataFrame(zscore(data, ddof=1), columns=data.columns, index=data.index)
+    return data
+
+
+def zscore_normalize_genes_by_group(data):
+    data = data.copy()
+    data["int_dex"] = range(data.shape[0])
+    data.set_index(["int_dex", "Tech"], append=True, inplace=True)
+    rna = zscore_normalize(data.loc[idx[:, :, "RNAseq"]])
+    array = zscore_normalize(data.loc[idx[:, :, "Microarray"]])
+    data = pd.concat([rna, array])
+    data.sort_index(level=1, inplace=True)
+    data = data.droplevel(level=1)
     return data
 
 
