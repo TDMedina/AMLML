@@ -191,3 +191,17 @@ def main_loader(normalization: Callable):
             categoricals, non_categoricals,
             set_ids, group_labels,
             expression_table)
+
+
+def normalization_generator(methods=None, verbose=False):
+    if methods is None:
+        methods = [prepare_log2_normed, prepare_zscore_normed, prepare_npn_normed]
+    if verbose:
+        print("Reading data...")
+    data = read_model_data()
+    for norm_method in methods:
+        if verbose:
+            print(f"Preparing method {norm_method.__name__}")
+        prepared = prepare_data(*data[:4], normalization=norm_method)
+        split = split_test_data(data[0], *prepared, *data[-2:])
+        yield norm_method.__name__, split
