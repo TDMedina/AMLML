@@ -135,7 +135,6 @@ class CombinedGeneModel(nn.Module):
         return x
 
 
-
 class EthnicityModel(nn.Module):
     def __init__(self, covariate_cardinality: dict, embedding_dims: dict):
         super().__init__()
@@ -209,23 +208,58 @@ class ClinicalModel(nn.Module):
 
 class SuperModel(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, n_expansion: int,
-                 n_clinical: int, covariate_cardinality: dict, embedding_dims: dict,
-                 shrinkage_factor: int, minimum_size: int, final_size: int):
+                 shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
+                 include_clinical_variables=True, n_clinical: int = None,
+                 covariate_cardinality: dict = None, embedding_dims: dict = None,
+                 ):
         super().__init__()
-        dnn_input_dim = n_genes + n_clinical + sum(embedding_dims.values())-3
+        self.includes_clinical = include_clinical_variables
+        dnn_input_dim = n_genes
+        self.clinical_model = None
+
+        if self.includes_clinical:
+            dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
+            self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
+                                                n_clinical-3)
         self.expression_model = CombinedGeneModel(n_genes, n_tech, n_expansion)
-        self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
-                                            n_clinical-3)
         self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
-                                                minimum_size, final_size)
+                                                minimum_penultimate_size, final_size)
         # self.output_activator = nn.Sigmoid()
 
     # def forward(self, input_tuple):
-    def forward(self, expression, clinical_categorical, clinical_non_categorical):
-        # expression, clinical_categorical, clinical_non_categorical = input_tuple
-        clinical = self.clinical_model(clinical_categorical, clinical_non_categorical)
-        expression = self.expression_model(expression)
-        x = torch.cat([expression, clinical], dim=1)
+    def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
+        x = self.expression_model(expression)
+        if self.includes_clinical:
+            clinical = self.clinical_model(clinical_categorical, clinical_non_categorical)
+            x = torch.cat([x, clinical], dim=1)
+        x = self.connected_layers(x)
+        # x = self.output_activator(x)
+        return x
+
+
+class CrossNormalizedModel(nn.Module):
+    def __init__(self, n_genes: int,
+                 shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
+                 include_clinical_variables=True, n_clinical: int = None,
+                 covariate_cardinality: dict = None, embedding_dims: dict = None):
+        super().__init__()
+        self.includes_clinical = include_clinical_variables
+        dnn_input_dim = n_genes
+        self.clinical_model = None
+
+        if self.includes_clinical:
+            dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
+            self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
+                                                n_clinical-3)
+        self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
+                                                minimum_penultimate_size, final_size)
+
+    def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
+        if self.includes_clinical:
+            clinical = self.clinical_model(clinical_categorical, clinical_non_categorical)
+            x = torch.cat([expression, clinical], dim=1)
+        else:
+            x = expression
         x = self.connected_layers(x)
         # x = self.output_activator(x)
         return x
