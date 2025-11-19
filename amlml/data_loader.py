@@ -1,25 +1,204 @@
 
 from collections.abc import Callable
 from collections import namedtuple
+from random import shuffle
+import pickle
 
 import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.model_selection import train_test_split
+from sklearn.utils import gen_batches
+
+from lifelines import KaplanMeierFitter
 
 import torch
 from torch import float32, tensor
+from torch.utils.data import Dataset
 
 from amlml.survival_data import prepare_outcomes, code_categoricals, add_nan_mask_stack
 from amlml.rna_data import read_rna_dataset, replace_with_tpm
 from amlml.microarray_data import read_microarray_dataset, read_gse37642
 from amlml.gene_set import GeneSet
 from amlml.cross_normalization import log2_transform, zscore_normalize, npn
+from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
 
 
-Dataset = namedtuple("Dataset", ["expression", "outcomes",
-                                 "categoricals", "non_categoricals",
-                                 "reference"])
+# Dataset = namedtuple("Dataset", ["expression", "outcomes",
+#                                  "categoricals", "non_categoricals",
+#                                  "reference"])
 DataLabels = namedtuple("DataLabels", ["index", "columns", "tech"])
+
+
+class NetworkDataset(Dataset):
+    def __init__(self, expression, durations, events,
+                 categoricals, non_categoricals,
+                 index, tech, genes, name=None, classes=None):
+        self.expression = expression
+        self.durations = durations
+        self.events = events
+        self.categoricals = categoricals
+        self.non_categoricals = non_categoricals
+        self.index = index
+        self.tech = tech
+
+        self.genes = genes
+
+        self.classes = classes
+        self.name = name
+
+        assert(1 == len({x.shape[0] for x in self.data}))
+
+    def __len__(self):
+        return self.expression.shape[0]
+
+    def __getitem__(self, index):
+        classes = self.classes[index] if self.classes is not None else None
+        return NetworkDataset(*[x[index] for x in self.data],
+                              index=self.index[index],
+                              tech=self.tech.iloc[index],
+                              classes=classes,
+                              genes=self.genes)
+
+    def __getitems__(self, indices):
+        classes = self.classes[indices] if self.classes is not None else None
+        return NetworkDataset(*[x[indices] for x in self.data],
+                              index=self.index[indices],
+                              tech=self.tech.iloc[indices],
+                              classes=classes,
+                              genes=self.genes)
+
+    @property
+    def data(self):
+        return [self.expression, self.durations, self.events,
+                self.categoricals, self.non_categoricals]
+    #
+    # @property
+    # def network_data(self):
+    #     return [self.expression, (self.durations, self.events),
+    #             self.categoricals, self.non_categoricals]
+
+    @property
+    def outcomes(self):
+        return self.durations, self.events
+
+    @property
+    def outcome_target_table(self):
+        return pd.DataFrame({"durations": self.durations.detach().numpy(),
+                             "events": self.events.detach().numpy()})
+
+    @property
+    def n_genes(self):
+        return self.expression.shape[-1]
+
+    @property
+    def n_clinical(self):
+        return self.categoricals.shape[-1] + self.non_categoricals.shape[-1]
+
+    def make_expression_table(self):
+        if len(self.expression.shape) == 3:
+            table = pd.DataFrame(self.expression.sum(axis=1), index=self.index,
+                                 columns=self.genes)
+        else:
+            table = pd.DataFrame(self.expression, index=self.index, columns=self.genes)
+        table = table.join(self.tech)
+        return table
+
+    @property
+    def network_args(self):
+        return self.expression, self.categoricals, self.non_categoricals
+
+    def subset_genes(self, genes):
+        data = NetworkDataset(self.expression[..., genes],
+                              self.durations, self.events,
+                              self.categoricals, self.non_categoricals,
+                              self.index, self.tech, genes,
+                              classes=self.classes)
+        return data
+
+    def generate_batches(self, batch_size, shuffle_=True):
+        index = list(range(len(self)))
+        if shuffle_:
+            shuffle(index)
+        for batch_dex in gen_batches(n=len(self), batch_size=batch_size, min_batch_size=batch_size):
+            yield self[index[batch_dex]]
+
+    def plot_survival_times(self):
+        table = self.outcome_target_table.sort_values("durations")
+        table["x"] = list(range(1, table.shape[0]+1))
+        figure = go.Figure()
+        for i, name in enumerate(["Censored", "Death"]):
+            subtable = table.loc[table.events == i]
+            figure.add_trace(go.Scatter(x=subtable.x, y=subtable.durations,
+                                        marker_color=i, name=name, mode="markers"))
+        return figure
+
+    def plot_kaplan_meier(self):
+        km = KaplanMeierFitter()
+        km.fit(self.durations, self.events)
+        figure = go.Figure(go.Scatter(x=km.timeline, y=km.survival_function_.KM_estimate))
+        upper_ci = km.confidence_interval_["KM_estimate_upper_0.95"]
+        lower_ci = km.confidence_interval_["KM_estimate_lower_0.95"]
+        ci_params = dict(
+            mode="lines",
+            marker=dict(color="#444"),
+            line=dict(width=0),
+            showlegend=False
+            )
+        figure.add_trace(go.Scatter(x=km.timeline, y=upper_ci, **ci_params))
+        figure.add_trace(go.Scatter(x=km.timeline, y=lower_ci, **ci_params,
+                                    fill="tonexty", fillcolor="rgba(68, 68, 68, 0.3)"))
+        return figure
+
+    def estimate_durations_with_rmst(self, max_time=None):
+        table = self.outcome_target_table
+        max_time = (max_time if max_time is not None
+                    else table.loc[table.events == 1, "durations"].max())
+        km = KaplanMeierFitter()
+        km.fit(table.durations, table.events)
+        rmst_cumsum = np.cumsum(km.survival_function_.KM_estimate.iloc[1:]
+                                * np.diff(km.timeline)).loc[km.timeline[1:] <= max_time]
+        rmst_tau = rmst_cumsum.iloc[-1]
+        table["rmst_predictions"] = table.durations
+        censor_times = table.loc[(table.events == 0) & (table.durations <= max_time),
+                                 "durations"]
+        table.loc[censor_times.index, "rmst_predictions"] = np.array(
+            censor_times.values
+            + ((rmst_tau - rmst_cumsum.loc[censor_times])
+            / km.survival_function_.loc[censor_times, "KM_estimate"]),
+            dtype=np.float32)
+        return table
+
+    @property
+    def rmst_estimates_table(self):
+        table = self.estimate_durations_with_rmst()
+        table = (table[["rmst_predictions", "events"]]
+                 .rename(columns={"rmst_predictions": "durations"}))
+        return table
+
+    def set_duration_classes(self, threshold=1460):
+        classes = tensor(self.classify_by_duration(threshold).survival_group.to_numpy(),
+                         dtype=torch.float32).view([-1, 1])
+        self.classes = classes
+
+    def classify_by_duration(self, threshold=1460):
+        table = self.outcome_target_table
+        table = table.loc[(table.durations >= threshold) | (table.events == 1)]
+        table["survival_group"] = (table.durations >= threshold).astype(int)
+        return table
+
+    def filter_low_censorship_and_classify(self, threshold=1460):
+        index = self.classify_by_duration(threshold).index
+        data = NetworkDataset(self.expression[index],
+                              self.durations[index], self.events[index],
+                              self.categoricals[index], self.non_categoricals[index],
+                              self.index[index],
+                              self.tech.iloc[index],
+                              self.genes,
+                              self.name + "_no_low_censor")
+        data.set_duration_classes(threshold)
+        return data
 
 
 def set_intersect_of_genes(*args):
@@ -98,6 +277,12 @@ def read_model_data():
     return data, rna_data, ma_data, cols, ids, all_group_labels
 
 
+def read_model_data_pickle():
+    with open("Data/big_pickle.pickle", "rb") as infile:
+        data, cols = pickle.load(infile)
+        return data, cols
+
+
 def separate_tech(data):
     rna = data.loc[data.Tech == "RNAseq"]
     array = data.loc[data.Tech == "Microarray"]
@@ -162,19 +347,23 @@ def prepare_supermodel_expression(data):
     return expression
 
 
-def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression):
+def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression,
+                 drop_zero_survivors=True):
+    if drop_zero_survivors:
+        data = data.loc[data.Outcomes["Overall Survival Time in Days"] > 0]
     train, test= train_test_split(data, test_size=0.2,
                                   stratify=data.Tech,
                                   random_state=0)
     train = train.sort_values("Tech", ascending=False)
     test = test.sort_values("Tech", ascending=False)
+    norm_name = normalization.__name__.split("_")[1]
 
     datasets = []
     for name, data_split in zip(["train", "test"], [train, test]):
         # Data labels.
-        data_labels = DataLabels(data_split.index,
-                                 data_split.Expression.columns,
-                                 data_split.Tech)
+        # data_labels = DataLabels(data_split.index,
+        #                          data_split.Expression.columns,
+        #                          data_split.Tech)
 
         # Expression.
         if normalization is None:
@@ -188,10 +377,11 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
         outcomes = outcomes[["duration", "event"]]
         outcomes.loc[:, "event"] = [int(x == "Dead") for x in outcomes.event]
 
-        if name == "train":
-            outcomes = prepare_outcomes(np.array(outcomes))
-        else:
-            outcomes = outcomes.T.astype(float)
+        # if name == "train":
+        #     outcomes = prepare_outcomes(np.array(outcomes))
+        # else:
+        #     outcomes = outcomes.T.astype(float)
+        outcomes = prepare_outcomes(np.array(outcomes))
 
         # Categorical covariates.
         cats = [x for x in data_split.Covariates if cols["Covariates"][x] == "categorical"]
@@ -207,7 +397,11 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
         non_categoricals = tensor(add_nan_mask_stack(non_categoricals), dtype=float32)
         non_categoricals = non_categoricals.permute(1, 0, 2)
 
-        dataset = Dataset(expression, outcomes, categoricals, non_categoricals, data_labels)
+        # dataset = Dataset(expression, outcomes, categoricals, non_categoricals, data_labels)
+        dataset = NetworkDataset(expression, *outcomes, categoricals, non_categoricals,
+                                 data_split.index, data_split.Tech,
+                                 data_split.Expression.columns,
+                                 name=f"{norm_name.upper()}-{name}")
         datasets.append(dataset)
     return datasets
     #
@@ -267,8 +461,12 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
 #             set_ids, group_labels,
 #             expression_table)
 
-def main_loader(normalization: Callable):
-    data, cols = read_model_data()
+def main_loader(normalization: Callable, verbose=True):
+    if verbose:
+        print("Reading data...")
+    data, cols = read_model_data_pickle()
+    if verbose:
+        print(f"Preparing method {normalization.__name__}")
     train, test = prepare_data(data, cols, normalization=normalization)
     return train, test
 
@@ -294,15 +492,17 @@ def main_loader(normalization: Callable):
 
 def normalization_generator(methods=None, verbose=False):
     if methods is None:
-        methods = [prepare_log2_expression, prepare_zscore_expression, prepare_npn_expression]
+        methods = [prepare_log2_expression, prepare_zscore_expression,
+                   prepare_npn_expression, prepare_supermodel_expression]
     if verbose:
         print("Reading data...")
-    data, cols = read_model_data()
+    data, cols = read_model_data_pickle()
     for norm_method in methods:
+        network_type = SuperModel if norm_method == prepare_supermodel_expression else CrossNormalizedModel
         if verbose:
             print(f"Preparing method {norm_method.__name__}")
         train, test = prepare_data(data, cols, norm_method)
-        yield norm_method.__name__, train
+        yield network_type, (train, test)
         # prepared = prepare_data(*data[:4], normalization=norm_method)
         # split = split_test_data(data[0], *prepared, *data[-2:])
         # yield norm_method.__name__, split
