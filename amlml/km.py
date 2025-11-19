@@ -1,5 +1,6 @@
 from itertools import combinations, pairwise
 from string import ascii_uppercase
+from typing import Literal
 
 import pandas as pd
 from lifelines.statistics import logrank_test, multivariate_logrank_test
@@ -10,23 +11,26 @@ import numpy as np
 from scipy.optimize import differential_evolution
 
 
-def optimize_survival_splits(data, n_groups=2, minimum_group_size=0.05):
+def optimize_survival_splits(data, n_groups=2, minimum_group_size=0.05,
+                             criterion: Literal["risk", "durations"] = "risk"):
     def multivar_test(cutoffs: list[float]):
         cutoffs = np.cumulative_sum(cutoffs)
         if max(cutoffs) >= 1 or len(set(cutoffs)) != len(cutoffs):
             return 1e6
-        cutoffs = [data.risk.quantile(x) for x in cutoffs]
+        cutoffs = [data[criterion].quantile(x) for x in cutoffs]
 
         groups = ascii_uppercase[:len(cutoffs)+1]
         data["group"] = groups[0]
         for group, cutoff in zip(groups[1:], cutoffs):
-            data.loc[data.risk > cutoff, "group"] = group
+            data.loc[data[criterion] > cutoff, "group"] = group
 
-        if ((vcounts:=data.group.value_counts()).shape[0] != len(cutoffs)+1
+        if ((vcounts := data.group.value_counts()).shape[0] != len(cutoffs)+1
                 or vcounts.min() < int(minimum_group_size*data.shape[0])):
             return 1
 
-        multivar_results = multivariate_logrank_test(data["duration"], data["group"], data["event"])
+        multivar_results = multivariate_logrank_test(data["durations"],
+                                                     data["group"],
+                                                     data["events"])
         # pairwise_results = iterate_logrank_tests(data)
         # pairwise_sum = max(x.p_value for x in pairwise_results.values())
         # return pairwise_sum
@@ -41,7 +45,7 @@ def plot_survival_curves(data):
     kmf = KaplanMeierFitter()
     for group in sorted(data.group.unique()):
         group_data = data.loc[data.group == group]
-        kmf.fit(group_data.duration, event_observed=group_data.event, label=group)
+        kmf.fit(group_data.durations, event_observed=group_data.events, label=group)
         kmf.plot_survival_function(ci_show=True)
 
     plt.title('Kaplan-Meier Survival Curves')
@@ -57,12 +61,12 @@ def iterate_logrank_tests(data, neighbors_only=False):
     if neighbors_only:
         pairs = pairwise(sorted(data.group.unique()))
     else:
-        pairs = [tuple(sorted(x)) for x in combinations(data.group.unique(), 2)]
+        pairs = sorted([tuple(sorted(x)) for x in combinations(data.group.unique(), 2)])
     for pair in pairs:
         group1 = data.loc[data.group == pair[0]]
         group2 = data.loc[data.group == pair[1]]
-        tests[pair] = logrank_test(group1.duration, group2.duration,
-                                   group1.event, group2.event)
+        tests[pair] = logrank_test(group1.durations, group2.durations,
+                                   group1.events, group2.events)
     return tests
     # return
 
