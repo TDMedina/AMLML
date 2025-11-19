@@ -96,7 +96,7 @@ def calculate_tpm(data, geneset, ensembl_level):
 
 def replace_with_tpm(data, geneset):
     tpm = calculate_tpm(data[["Expression"]], geneset, 1).copy()
-    data = data[["Outcomes", "Covariates"]].join(tpm)
+    data = data[["Outcomes", "Covariates", "Tech"]].join(tpm)
     return data
 
 
