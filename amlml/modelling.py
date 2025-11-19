@@ -61,12 +61,12 @@ class LocalLayers(nn.Module):
 
 
 class ConnectedLayers(nn.Module):
-    def __init__(self, n_genes, shrinkage_factor=10, minimum_size=10, final_size=1):
+    def __init__(self, n_genes, shrinkage_factor=10, minimum_penultimate_size=10, final_size=1):
         super().__init__()
 
         connected_layers = []
         n = n_genes
-        while minimum_size <= (n_out := n // shrinkage_factor):
+        while minimum_penultimate_size <= (n_out := n // shrinkage_factor):
             connected_layers.append(nn.Linear(n, n_out))
             n = n_out
         connected_layers.append(nn.Linear(n, final_size, bias=False))
@@ -185,11 +185,11 @@ def train_model(data, model, n_epochs, batch_size=10):
 
     for epoch in tqdm(range(n_epochs), position=0, leave=True):
         for i in tqdm(range(0, data_in.shape[1], batch_size), leave=False, position=1):
+            optimizer.zero_grad()
             batch_in = data_in[:, i:i+batch_size, :]
             batch_true = data_true[i:i+batch_size, :]
             batch_out = model(batch_in)
             loss = loss_fn(batch_out, batch_true)
-            optimizer.zero_grad()
             loss.backward()
             optimizer.step()
         # print(f"Latest loss {loss}\r", end="")
