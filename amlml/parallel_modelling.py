@@ -4,17 +4,25 @@ from amlml.modelling import ConnectedLayers
 
 
 class ParallelBellowsLayers(nn.Module):
-    def __init__(self, n_genes: int, n_tech: int, n_expansion: int):
+    def __init__(self, n_genes: int, n_tech: int, n_expansion: int, zero_params=False,
+                 kaiming_weights=False):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
         self.n_expansion = n_expansion
 
         self.weights1 = nn.Parameter(torch.randn(n_genes*n_tech, n_expansion))
-        self.bias1 = nn.Parameter(torch.randn(n_genes*n_tech, n_expansion))
+        self.bias1 = nn.Parameter(torch.zeros(n_genes*n_tech, n_expansion))
 
         self.weights2 = nn.Parameter(torch.randn(n_genes*n_tech, n_expansion))
-        self.bias2 = nn.Parameter(torch.randn(n_genes*n_tech))
+        self.bias2 = nn.Parameter(torch.zeros(n_genes*n_tech))
+
+        if zero_params:
+            for param in self.parameters():
+                nn.init.zeros_(param)
+        elif kaiming_weights:
+            for param in [self.weights1, self.weights2]:
+                nn.init.kaiming_uniform_(param, nonlinearity="relu")
 
         self.activation = nn.ReLU()
 
@@ -60,13 +68,20 @@ class ParallelBellowsLayers(nn.Module):
 
 
 class ParallelGeneLayers(nn.Module):
-    def __init__(self, n_genes: int, n_tech: int):
+    def __init__(self, n_genes: int, n_tech: int, zero_params=False,
+                 kaiming_weights=False):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
 
         self.weights = nn.Parameter(torch.randn(self.n_genes, self.n_tech))
-        self.bias = nn.Parameter(torch.randn(self.n_genes))
+        self.bias = nn.Parameter(torch.zeros(self.n_genes))
+
+        if zero_params:
+            nn.init.zeros_(self.weights)
+            nn.init.zeros_(self.bias)
+        elif kaiming_weights:
+            nn.init.kaiming_uniform_(self.weights, nonlinearity="relu")
         self.activation = nn.ReLU()
 
     def __repr__(self):
@@ -89,32 +104,33 @@ class ParallelGeneLayers(nn.Module):
         return results
 
 
-class CombinedParallelModel(nn.Module):
-    def __init__(self, n_genes: int, n_tech: int, n_expansion=4,
-                 shrinkage_factor=10, minimum_size=10, final_size=1):
-        super().__init__()
-        self.n_genes = n_genes
-        self.n_tech = n_tech
-        self.n_expansion = n_expansion
-        self.shrinkage_factor = shrinkage_factor
-        self.minimum_size = minimum_size
-        self.final_size = final_size
-
-        self.local_layers = ParallelBellowsLayers(n_genes, n_tech, n_expansion)
-        self.gene_layers = ParallelGeneLayers(n_genes, n_tech)
-        self.connected_layers = ConnectedLayers(n_genes, shrinkage_factor,
-                                                minimum_size, final_size)
-
-    def forward(self, x):
-        x = self.local_layers(x)
-        x = self.gene_layers(x)
-        x = self.connected_layers(x)
-        return x
-
+# class CombinedParallelModel(nn.Module):
+#     def __init__(self, n_genes: int, n_tech: int, n_expansion=4,
+#                  shrinkage_factor=10, minimum_size=10, final_size=1, zero_weights=False):
+#         super().__init__()
+#         self.n_genes = n_genes
+#         self.n_tech = n_tech
+#         self.n_expansion = n_expansion
+#         self.shrinkage_factor = shrinkage_factor
+#         self.minimum_size = minimum_size
+#         self.final_size = final_size
+#
+#         self.local_layers = ParallelBellowsLayers(n_genes, n_tech, n_expansion,
+#                                                   zero_weights=zero_weights)
+#         self.gene_layers = ParallelGeneLayers(n_genes, n_tech, zero_weights=zero_weights)
+#         self.connected_layers = ConnectedLayers(n_genes, shrinkage_factor,
+#                                                 minimum_size, final_size)
+#
+#     def forward(self, x):
+#         x = self.local_layers(x)
+#         x = self.gene_layers(x)
+#         x = self.connected_layers(x)
+#         return x
 
 
 class CombinedGeneModel(nn.Module):
-    def __init__(self, n_genes: int, n_tech: int, n_expansion=4):
+    def __init__(self, n_genes: int, n_tech: int, n_expansion=4, zero_params=False,
+                 kaiming_weights=False):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
@@ -123,8 +139,11 @@ class CombinedGeneModel(nn.Module):
         # self.minimum_size = minimum_size
         # self.final_size = final_size
 
-        self.local_layers = ParallelBellowsLayers(n_genes, n_tech, n_expansion)
-        self.gene_layers = ParallelGeneLayers(n_genes, n_tech)
+        self.local_layers = ParallelBellowsLayers(n_genes, n_tech, n_expansion,
+                                                  zero_params=zero_params,
+                                                  kaiming_weights=kaiming_weights)
+        self.gene_layers = ParallelGeneLayers(n_genes, n_tech, zero_params=zero_params,
+                                              kaiming_weights=kaiming_weights)
         # self.connected_layers = ConnectedLayers(n_genes, shrinkage_factor,
         #                                         minimum_size, final_size)
 
@@ -166,7 +185,8 @@ class ClinicalMissingMask(nn.Module):
         self.n_variables = n_variables
 
         self.weights = nn.Parameter(torch.randn(self.n_variables, 2))
-        self.bias = nn.Parameter(torch.randn(self.n_variables))
+        nn.init.kaiming_uniform_(self.weights, nonlinearity="relu")
+        self.bias = nn.Parameter(torch.zeros(self.n_variables))
         self.activation = nn.ReLU()
 
     def __repr__(self):
@@ -211,7 +231,8 @@ class SuperModel(nn.Module):
                  shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
                  include_clinical_variables=True, n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
-                 ):
+                 zero_params=False, kaiming_weights=False, output_xavier=False,
+                 bellows_normalization=True):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -223,7 +244,10 @@ class SuperModel(nn.Module):
                                                 n_clinical-3)
         self.expression_model = CombinedGeneModel(n_genes, n_tech, n_expansion)
         self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
-                                                minimum_penultimate_size, final_size)
+                                                minimum_penultimate_size, final_size,
+                                                zero_params=zero_params,
+                                                kaiming_weights=kaiming_weights,
+                                                output_xavier=output_xavier)
         # self.output_activator = nn.Sigmoid()
 
     # def forward(self, input_tuple):
@@ -241,7 +265,8 @@ class CrossNormalizedModel(nn.Module):
     def __init__(self, n_genes: int,
                  shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
                  include_clinical_variables=True, n_clinical: int = None,
-                 covariate_cardinality: dict = None, embedding_dims: dict = None):
+                 covariate_cardinality: dict = None, embedding_dims: dict = None,
+                 zero_params=False, kaiming_weights=False, output_xavier=False):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -252,7 +277,10 @@ class CrossNormalizedModel(nn.Module):
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
                                                 n_clinical-3)
         self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
-                                                minimum_penultimate_size, final_size)
+                                                minimum_penultimate_size, final_size,
+                                                zero_params=zero_params,
+                                                kaiming_weights=kaiming_weights,
+                                                output_xavier=output_xavier)
 
     def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
         if self.includes_clinical:
