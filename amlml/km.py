@@ -8,11 +8,12 @@ from lifelines.statistics import logrank_test, multivariate_logrank_test
 import matplotlib.pyplot as plt
 from lifelines import KaplanMeierFitter
 import numpy as np
-from scipy.optimize import differential_evolution
+from scipy.optimize import differential_evolution, brute
 
 
 def optimize_survival_splits(data, n_groups=2, minimum_group_size=0.05,
-                             criterion: Literal["risk", "durations"] = "risk"):
+                             criterion: Literal["risk", "durations"] = "risk",
+                             method: Literal["DE", "Brute"] = "Brute"):
     def multivar_test(cutoffs: list[float]):
         cutoffs = np.cumulative_sum(cutoffs)
         if max(cutoffs) >= 1 or len(set(cutoffs)) != len(cutoffs):
@@ -36,8 +37,12 @@ def optimize_survival_splits(data, n_groups=2, minimum_group_size=0.05,
         # return pairwise_sum
         return multivar_results.p_value
 
-    optimal = differential_evolution(multivar_test, [(0, 1)]*(n_groups-1),
-                                     strategy='best1bin', maxiter=1000, tol=1e-8)
+    if method == "DE":
+        optimal = differential_evolution(multivar_test, [(0, 1)]*(n_groups-1),
+                                         strategy="best1bin", maxiter=1000, tol=1e-8)
+    elif method == "Brute":
+        optimal = brute(multivar_test, [(0, 1)]*(n_groups-1), Ns=100, full_output=False,
+                        finish=None)
     return optimal
 
 
