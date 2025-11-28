@@ -61,7 +61,9 @@ class LocalLayers(nn.Module):
 
 
 class ConnectedLayers(nn.Module):
-    def __init__(self, n_genes, shrinkage_factor=10, minimum_penultimate_size=10, final_size=1):
+    def __init__(self, n_genes, shrinkage_factor=10, minimum_penultimate_size=10,
+                 final_size=1, zero_params=False, kaiming_weights=False,
+                 output_xavier=False):
         super().__init__()
 
         connected_layers = []
@@ -69,8 +71,17 @@ class ConnectedLayers(nn.Module):
         while minimum_penultimate_size <= (n_out := n // shrinkage_factor):
             connected_layers.append(nn.Linear(n, n_out))
             n = n_out
-        connected_layers.append(nn.Linear(n, final_size, bias=False))
+        connected_layers.append(nn.Linear(n, final_size))
         self.connected_layers = nn.ModuleList(connected_layers)
+        if zero_params:
+            for layer in self.connected_layers:
+                for param in layer.parameters():
+                    nn.init.zeros_(param)
+        elif kaiming_weights:
+            for layer in self.connected_layers:
+                nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+        if output_xavier:
+            nn.init.xavier_uniform_(self.connected_layers[-1].weight)
         self.activator = nn.ReLU()
         # self.final_activator = nn.ReLU()
 
