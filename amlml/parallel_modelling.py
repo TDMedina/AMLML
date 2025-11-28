@@ -63,7 +63,7 @@ class ParallelBellowsLayers(nn.Module):
         results = self.activation(results)
 
         results = results.squeeze().T
-        results = results.view(results.shape[0], self.n_tech, self.n_genes).permute(1, 0, 2)
+        results = results.view(results.shape[0], self.n_tech, self.n_genes)
         return results
 
 
@@ -97,7 +97,7 @@ class ParallelGeneLayers(nn.Module):
         return weight_matrix @ gene_matrix + bias_matrix
 
     def forward(self, x):
-        x = x.permute(2, 0, 1)
+        x = x.permute(2, 1, 0)
         combine_parallel = vmap(self.combine_gene, in_dims=(0, 0, 0))
         results = combine_parallel(x, self.weights, self.bias).T
         results = self.activation(results)
@@ -242,7 +242,14 @@ class SuperModel(nn.Module):
             dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
                                                 n_clinical-3)
-        self.expression_model = CombinedGeneModel(n_genes, n_tech, n_expansion)
+        if bellows_normalization:
+            self.expression_model = CombinedGeneModel(n_genes, n_tech, n_expansion,
+                                                      zero_params=zero_params,
+                                                      kaiming_weights=kaiming_weights)
+        else:
+            self.expression_model = ParallelGeneLayers(n_genes, n_tech,
+                                                       zero_params=zero_params,
+                                                       kaiming_weights=kaiming_weights)
         self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
                                                 minimum_penultimate_size, final_size,
                                                 zero_params=zero_params,
