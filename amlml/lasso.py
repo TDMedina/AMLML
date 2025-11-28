@@ -45,15 +45,16 @@ def make_lasso_data(original_data, training_splits):
     return data
 
 
-def test_lasso_penalties(data, outcomes, l1_ratio=1):
+def test_lasso_penalties(data, outcomes, l1_ratio=1, alpha_min_ratio=0.01,
+                         n_alphas=21, alphas=None):
     outcomes = np.array(list(zip([x for x in outcomes[1]],
                                  [x for x in outcomes[0]])),
                         dtype="bool,f")
     # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=1.0, alpha_min_ratio=0.0001)
     # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.00001,
     #                                    n_alphas=20, verbose=True)
-    cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.01,
-                                       n_alphas=20, verbose=True)
+    cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=alpha_min_ratio,
+                                       n_alphas=n_alphas, verbose=True)
     cox_lasso.fit(data, outcomes)
     coefficients_lasso = pd.DataFrame(cox_lasso.coef_, index=data.columns,
                                       columns=np.round(cox_lasso.alphas_, 5))
