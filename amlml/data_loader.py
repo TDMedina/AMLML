@@ -1,13 +1,17 @@
 
 from collections.abc import Callable
 from collections import namedtuple
+from functools import wraps
 from random import shuffle
 import pickle
+from typing import Literal
 
 import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 import plotly.express as px
+from scipy.optimize import brute
 from sklearn.model_selection import train_test_split
 from sklearn.utils import gen_batches
 
@@ -23,6 +27,7 @@ from amlml.microarray_data import read_microarray_dataset, read_gse37642
 from amlml.gene_set import GeneSet
 from amlml.cross_normalization import log2_transform, zscore_normalize, npn
 from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
+from amlml.km import optimize_survival_splits
 
 
 # Dataset = namedtuple("Dataset", ["expression", "outcomes",
@@ -34,7 +39,8 @@ DataLabels = namedtuple("DataLabels", ["index", "columns", "tech"])
 class NetworkDataset(Dataset):
     def __init__(self, expression, durations, events,
                  categoricals, non_categoricals,
-                 index, tech, genes, name=None, classes=None):
+                 index, tech, genes, name=None, classes=None,
+                 rmst=False, max_time=None, tukey_factor=3):
         self.expression = expression
         self.durations = durations
         self.events = events
@@ -47,6 +53,12 @@ class NetworkDataset(Dataset):
 
         self.classes = classes
         self.name = name
+
+        self.rmst = None
+        if rmst:
+            self.rmst = self.estimate_durations_with_rmst(max_time=max_time,
+                                                          tukey_factor=tukey_factor,
+                                                          keep_original_durations=False)
 
         assert(1 == len({x.shape[0] for x in self.data}))
 
@@ -89,6 +101,12 @@ class NetworkDataset(Dataset):
                              "events": self.events.detach().numpy()})
 
     @property
+    def class_table(self):
+        table = self.outcome_target_table
+        table["groups"] = self.classes.squeeze().tolist()
+        return table
+
+    @property
     def n_genes(self):
         return self.expression.shape[-1]
 
@@ -121,8 +139,148 @@ class NetworkDataset(Dataset):
         index = list(range(len(self)))
         if shuffle_:
             shuffle(index)
-        for batch_dex in gen_batches(n=len(self), batch_size=batch_size, min_batch_size=batch_size):
+        for batch_dex in gen_batches(n=len(self), batch_size=batch_size):
             yield self[index[batch_dex]]
+
+    def estimate_durations_with_rmst(self, max_time=None, tukey_factor=None,
+                                     keep_original_durations=False, save=True):
+        table = self.outcome_target_table
+        if tukey_factor is not None:
+            times = table.loc[table.events == 1, "durations"].describe()
+            max_time = times["75%"] + tukey_factor * (times["75%"] - times["25%"])
+        elif max_time is not None:
+            max_time = max_time
+        else:
+            max_time = table.loc[table.events == 1, "durations"].max()
+
+        km = KaplanMeierFitter()
+        km.fit(table.durations, table.events)
+        rmst_cumsum = np.cumsum(km.survival_function_.KM_estimate.iloc[1:]
+                                * np.diff(km.timeline)).loc[km.timeline[1:] <= max_time]
+        rmst_tau = rmst_cumsum.iloc[-1]
+        table["rmst_predictions"] = table.durations
+        censor_times = table.loc[(table.events == 0) & (table.durations <= max_time),
+                                 "durations"]
+        table.loc[censor_times.index, "rmst_predictions"] = np.array(
+            censor_times.values
+            + ((rmst_tau - rmst_cumsum.loc[censor_times])
+            / km.survival_function_.loc[censor_times, "KM_estimate"]),
+            dtype=np.float32)
+        if keep_original_durations:
+            return table
+        table = (table[["rmst_predictions", "events"]]
+                 .rename(columns={"rmst_predictions": "durations"}))
+        table["groups"] = False
+        if save:
+            self.rmst = table
+        return table
+
+    @staticmethod
+    def rmst_method(fn):
+        @wraps(fn)
+        def wrapper(self, *args, **kwargs):
+            if self.rmst is None:
+                raise NotImplementedError("Must run estimate_durations_with_rmst first.")
+            return fn(self, *args, **kwargs)
+        return wrapper
+    # @property
+    # def rmst_estimates_table(self):
+    #     if self._rmst is not None:
+    #         return self._rmst
+    #     table = self.estimate_durations_with_rmst()
+    #     table = (table[["rmst_predictions", "events"]]
+    #              .rename(columns={"rmst_predictions": "durations"}))
+    #     table["groups"] = False
+    #     self._rmst = table
+    #     return table
+
+    @rmst_method
+    def calculate_rmst_class_cis(self):
+        error = (self.rmst.groupby("groups").durations
+                 .agg(error=lambda x: 1.96 * x.std() / np.sqrt(x.count()),
+                      mean=lambda x: x.mean())
+                 .assign(ci_upper=lambda x: x["mean"] + x["error"],
+                         ci_lower=lambda x: x["mean"] - x["error"]))
+        return error
+
+    @rmst_method
+    def optimize_rmst_class_cis(self, plot=False):
+        errors = []
+        def _loss(threshold):
+            self.rmst["groups"] = self.rmst["durations"] >= self.rmst.durations.quantile(*threshold)
+            error = self.calculate_rmst_class_cis()
+            distance = error.loc[True, "ci_lower"] - error.loc[False, "ci_upper"]
+            error["distance"] = distance
+            error["threshold"] = threshold[0]
+            errors.append(error.reset_index())
+            return -distance
+        optimal = brute(func=_loss, ranges=[(0.05, 0.95)], Ns=91,
+                        full_output=True, finish=None)
+        errors = pd.concat(errors).set_index(["threshold", "groups"])
+        optimal_table = pd.DataFrame(optimal[-2:]).T
+        optimal_table["durations"] = self.rmst.durations.quantile(optimal_table[0]).values
+        optimal_table.columns = ["quantile", "ci_interval", "durations"]
+        optimal_table["ci_interval"] = -optimal_table.ci_interval
+        optimum = optimal_table.iloc[optimal_table.ci_interval.argmax()]
+        if plot:
+            fig = make_subplots(2, 1)
+            fig .add_trace(go.Scatter(x=optimal_table.durations,
+                                      y=optimal_table.ci_interval),
+                           row=1, col=1)
+            fig.add_trace(go.Scatter(x=[optimum.durations], y=[optimum.ci_interval],
+                                     text=[f"{optimum.durations / 365:.1f} years"],
+                                     mode="markers+text", textposition="top center"),
+                          row=1, col=1)
+            for thresh in errors.index.get_level_values("threshold").unique():
+                for group in [False, True]:
+                    subtable = errors.loc[thresh, group]
+                    fig.add_trace(go.Scatter(x=subtable[["ci_lower", "mean", "ci_upper"]],
+                                             y=[thresh]*3, mode="markers+lines",),
+                                  row=2, col=1)
+            return optimum, optimal_table, fig
+        return optimum, optimal_table, errors
+
+    @rmst_method
+    def classify_by_rmst_ci_interval(self, save=False):
+        optimum, _, _ = self.optimize_rmst_class_cis(plot=False)
+        self.rmst["groups"] = self.rmst.durations >= optimum.durations
+        if save:
+            self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
+        return self.rmst
+
+    def classify_by_duration(self, threshold=1460, save=False):
+        table = self.outcome_target_table
+        table = table.loc[(table.durations >= threshold) | (table.events == 1)]
+        table["groups"] = (table.durations >= threshold).astype(int)
+        if save:
+            self.classes = tensor(table["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
+        return table
+
+    def filter_low_censorship_and_classify_by_duration(self, threshold=1460):
+        classes = self.classify_by_duration(threshold)
+        data = self[classes.index]
+        data.name = self.name + "_no_low_censor"
+        data.classes = tensor(classes["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
+        return data
+
+    def filter_by_age_at_diagnosis(self, age_in_days, keep_less_than=True):
+        if keep_less_than:
+            index = self.non_categoricals[:, 0, 0] < age_in_days
+        else:
+            index = self.non_categoricals[:, 0, 0] >= age_in_days
+        dataset = self[index]
+        dataset.name = self.name + "_age_filtered"
+        return dataset
+
+    @rmst_method
+    def plot_class_duration_distribution(self, rmst=False):
+        table = self.rmst if rmst else self.class_table
+        fig = go.Figure()
+        for name, x in zip(["High", "Low"], [True, False]):
+            for i, name2 in enumerate(["Censored", "Death"]):
+                subtable = table.loc[(table["groups"] == x) & (table.events == i)]
+                fig.add_trace(go.Histogram(x=subtable.durations, name=f"{name2}-{name}"))
+        return fig
 
     def plot_survival_times(self):
         table = self.outcome_target_table.sort_values("durations")
@@ -132,6 +290,13 @@ class NetworkDataset(Dataset):
             subtable = table.loc[table.events == i]
             figure.add_trace(go.Scatter(x=subtable.x, y=subtable.durations,
                                         marker_color=i, name=name, mode="markers"))
+        return figure
+
+    def plot_survival_histogram(self):
+        table = self.outcome_target_table
+        figure = go.Figure()
+        for i, name in enumerate(["Censored", "Death"]):
+            figure.add_trace(go.Histogram(x=table.loc[table.events == i], name=name))
         return figure
 
     def plot_kaplan_meier(self):
@@ -150,56 +315,6 @@ class NetworkDataset(Dataset):
         figure.add_trace(go.Scatter(x=km.timeline, y=lower_ci, **ci_params,
                                     fill="tonexty", fillcolor="rgba(68, 68, 68, 0.3)"))
         return figure
-
-    def estimate_durations_with_rmst(self, max_time=None):
-        table = self.outcome_target_table
-        max_time = (max_time if max_time is not None
-                    else table.loc[table.events == 1, "durations"].max())
-        km = KaplanMeierFitter()
-        km.fit(table.durations, table.events)
-        rmst_cumsum = np.cumsum(km.survival_function_.KM_estimate.iloc[1:]
-                                * np.diff(km.timeline)).loc[km.timeline[1:] <= max_time]
-        rmst_tau = rmst_cumsum.iloc[-1]
-        table["rmst_predictions"] = table.durations
-        censor_times = table.loc[(table.events == 0) & (table.durations <= max_time),
-                                 "durations"]
-        table.loc[censor_times.index, "rmst_predictions"] = np.array(
-            censor_times.values
-            + ((rmst_tau - rmst_cumsum.loc[censor_times])
-            / km.survival_function_.loc[censor_times, "KM_estimate"]),
-            dtype=np.float32)
-        return table
-
-    @property
-    def rmst_estimates_table(self):
-        table = self.estimate_durations_with_rmst()
-        table = (table[["rmst_predictions", "events"]]
-                 .rename(columns={"rmst_predictions": "durations"}))
-        return table
-
-    def set_duration_classes(self, threshold=1460):
-        classes = tensor(self.classify_by_duration(threshold).survival_group.to_numpy(),
-                         dtype=torch.float32).view([-1, 1])
-        self.classes = classes
-
-    def classify_by_duration(self, threshold=1460):
-        table = self.outcome_target_table
-        table = table.loc[(table.durations >= threshold) | (table.events == 1)]
-        table["survival_group"] = (table.durations >= threshold).astype(int)
-        return table
-
-    def filter_low_censorship_and_classify(self, threshold=1460):
-        index = self.classify_by_duration(threshold).index
-        data = NetworkDataset(self.expression[index],
-                              self.durations[index], self.events[index],
-                              self.categoricals[index], self.non_categoricals[index],
-                              self.index[index],
-                              self.tech.iloc[index],
-                              self.genes,
-                              self.name + "_no_low_censor")
-        data.set_duration_classes(threshold)
-        return data
-
 
 def set_intersect_of_genes(*args):
     genesets = [set(dataset.Expression.columns) for dataset in args]
@@ -334,7 +449,7 @@ def prepare_npn_expression(data):
     return all_expression
 
 
-def prepare_supermodel_expression(data):
+def prepare_supermodel_expression(data, with_zscore=False):
     rna, array = separate_tech(data)
     rna = np.stack([np.array(rna.Expression),
                     np.zeros(rna.Expression.shape)],
