@@ -18,6 +18,7 @@ from tqdm import tqdm
 import torch
 from torch.optim.lr_scheduler import CyclicLR
 from torch.nn import BCEWithLogitsLoss
+from torch import sigmoid
 import torchtuples as tt
 
 from pycox.models import CoxPH
@@ -92,13 +93,17 @@ def lr_cyclic_step_calculator(sample_size, batch_size, epochs_per_cycle):
 def cross_validation_run(dataset: NetworkDataset,
                          network_type: Callable = CrossNormalizedModel,
                          include_clinical_variables=True, covariate_cardinality=None,
-                         l1_ratio=1, iterate_alphas=True,
-                         alpha_min_ratio=0.01, n_alphas=21, alphas=None,
+                         l1_ratio=1, iterate_alphas=True, cv_splits=5,
+                         alpha_min_ratio=0.01, n_alphas=20, alphas=None,
                          survival_splits=3, cov_threshold=0.01,
                          rel_slope_threshold=0.01,
                          batch_size=100, epochs=360, epochs_per_cycle=6,
                          save_network=False, end_with_lr_cycle=False,
-                         classify=False, classification_threshold=1460):
+                         classify=False, use_rmst=True, classification_threshold=1460,
+                         minimum_penultimate_size=10, shrinkage_factor=10,
+                         rmst_max_time=None, rmst_tukey_factor=None,
+                         zero_params=False, kaiming_weights=False,
+                         bellows_normalization=True, remove_age_over=None):
     verbose = True
     len_loss_convergence = epochs_per_cycle*3
     convergence_test = generate_loss_convergence_test(
@@ -108,10 +113,17 @@ def cross_validation_run(dataset: NetworkDataset,
         rel_slope_threshold=rel_slope_threshold,
         n_losses=len_loss_convergence
         )
+    if remove_age_over is not None:
+        dataset = dataset.filter_by_age_at_diagnosis(remove_age_over)
     if classify:
-        dataset = dataset.filter_low_censorship_and_classify(classification_threshold)
+        if use_rmst:
+            dataset.estimate_durations_with_rmst(max_time=rmst_max_time,
+                                                 tukey_factor=rmst_tukey_factor)
+            dataset.classify_by_rmst_ci_interval(save=True)
+        else:
+            dataset = dataset.filter_low_censorship_and_classify_by_duration(classification_threshold)
     print(f"Running dataset: {dataset.name}")
-    kf = StratifiedKFold(n_splits=5, random_state=10, shuffle=True)
+    kf = StratifiedKFold(n_splits=cv_splits, random_state=10, shuffle=True)
     # kf = RepeatedStratifiedKFold(n_splits=5, random_state=10, n_repeats=10)
     results = []
     for i, (train_fold, val_fold) in enumerate(kf.split(dataset.expression, dataset.tech)):
@@ -128,20 +140,21 @@ def cross_validation_run(dataset: NetworkDataset,
                                                fold_data.outcomes,
                                                l1_ratio=l1_ratio,
                                                alpha_min_ratio=alpha_min_ratio,
-                                               n_alphas=n_alphas,
+                                               n_alphas=n_alphas+1,
                                                alphas=alphas)
             geneset = get_non_zero_genes(alpha_table)
         else:
             geneset = {0: (slice(None), list(dataset.genes))}
         for j, (alpha, (index, genes)) in enumerate(geneset.items()):
-            print(f"    Preparing training fold for alpha={alpha}...")
+            print(f"    Preparing training fold for "
+                  f"alpha={alpha} ({len(genes)} genes)...")
             alpha_data = fold_data.subset_genes(index)
             alpha_val = fold_data_val.subset_genes(index)
 
             network_parameters = dict(
                 n_genes=alpha_data.n_genes,
-                shrinkage_factor=10,
-                minimum_penultimate_size=10,
+                shrinkage_factor=shrinkage_factor,
+                minimum_penultimate_size=minimum_penultimate_size,
                 final_size=1,
                 include_clinical_variables=include_clinical_variables,
                 n_clinical=alpha_data.n_clinical,
@@ -149,18 +162,22 @@ def cross_validation_run(dataset: NetworkDataset,
                 embedding_dims={"race": 3, "ethnicity": 3,
                                 "interaction": 3,
                                 "protocol": 3},
+                zero_params=zero_params,
+                kaiming_weights=kaiming_weights,
+                output_xavier=classify
                 )
             if network_type == SuperModel:
                 network_parameters.update(dict(
                     n_tech=2,
-                    n_expansion=4
+                    n_expansion=4,
+                    bellows_normalization=bellows_normalization
                     ))
 
             network = network_type(**network_parameters)
 
             # Start by using PyCox's lr_finder.
             if classify:
-                lr_init = 1e-5
+                lr_init = 1e-4
             else:
                 print("    Calculating learning rate...")
                 model = CoxPH(network, tt.optim.Adam)
@@ -183,14 +200,14 @@ def cross_validation_run(dataset: NetworkDataset,
             lr_scheduler = CyclicLR(
                 optimizer, base_lr=lr_init/10, max_lr=lr_init*10,
                 # mode="exp_range", gamma=0.8, **steps, scale_mode="cycle",
-                mode="triangular2", **steps, scale_mode="iterations"
-                # mode="triangular", scale_fn=lambda cycle: 0.8**(cycle-1), **steps,
+                mode="triangular2", **steps, scale_mode="iterations",
+                # mode="triangular", **steps, scale_mode="iterations"
                 # scale_mode="cycle",
                 )
 
             loss_fn = BCEWithLogitsLoss() if classify else CoxPHLoss()
-            run_loss = (lambda predicted, batch_: loss_fn(predicted, batch_.classes) if classify
-            else loss_fn(predicted, *batch_.outcomes))
+            run_loss = ((lambda predicted, batch_: loss_fn(predicted, batch_.classes)) if classify
+                        else lambda predicted, batch_: loss_fn(predicted, *batch_.outcomes))
             losses = []
             losses_val = []
             learning_rates = []
@@ -228,22 +245,21 @@ def cross_validation_run(dataset: NetworkDataset,
                                           "Var": "--",
                                           "Slope": "--"})
 
-
-
             # Evaluate.
-            predicted_hazards = network(*alpha_data.network_args).detach().numpy()
-            predicted_hazards_val = network(*alpha_val.network_args).detach().numpy()
+            predicted_hazards = network(*alpha_data.network_args)
+            predicted_hazards_val = network(*alpha_val.network_args)
 
             if classify:
-                classes_train = pd.DataFrame(zip(alpha_data.classes.view([1, -1]),
-                                                 predicted_hazards),
+                classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
+                                                 sigmoid(predicted_hazards).squeeze().tolist()),
                                              columns=["Training", "Predicted"])
-                classes_val = pd.DataFrame(zip(alpha_val.classes.view([1, -1]),
-                                               predicted_hazards),
+                classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
+                                               sigmoid(predicted_hazards_val).squeeze().tolist()),
                                            columns=["Validation", "Predicted"])
                 results.append(CV_Result(
                     fold=i,
                     alpha=alpha,
+                    alpha_index=j,
                     genes=genes,
                     n_epochs=epoch,
                     lrs=[float(x[0]) for x in learning_rates],
@@ -263,6 +279,8 @@ def cross_validation_run(dataset: NetworkDataset,
                     ))
                 continue
 
+            predicted_hazards = predicted_hazards.detach().numpy()
+            predicted_hazards_val = predicted_hazards_val.detach().numpy()
             baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
                                                         predicted_hazards)
             survival = predict_survival_table(predicted_hazards_val,
@@ -289,14 +307,16 @@ def cross_validation_run(dataset: NetworkDataset,
             km_val_df = km_val_df.assign(risk=predicted_hazards_val)
 
             print("    Calculating survival split...")
-            optimal_splits = optimize_survival_splits(km_val_df, n_groups=survival_splits)
-            risk_splits = np.cumulative_sum(optimal_splits.x)
+            optimal_splits = optimize_survival_splits(km_val_df, n_groups=survival_splits,
+                                                      method="Brute")
+            risk_splits = np.cumulative_sum(optimal_splits)
             logranks = iterate_logrank_tests(km_val_df)
 
 
             results.append(CV_Result(
                 fold=i,
                 alpha=alpha,
+                alpha_index=j,
                 genes=genes,
                 n_epochs=epoch,
                 lrs=[float(x[0]) for x in learning_rates],
@@ -314,7 +334,7 @@ def cross_validation_run(dataset: NetworkDataset,
                 risk_splits=risk_splits,
                 logranks=logranks
                 ))
-    results = CV_ResultsCollection(results, None, 5)
+    results = CV_ResultsCollection(results, None, cv_splits)
     return results
 
 
@@ -327,7 +347,7 @@ def cv_multiple(datasets: list[tuple[Callable, NetworkDataset]], **kwargs):
                                            **kwargs)
         results.extend(sub_results.results)
     print("Collating results...")
-    results = CV_ResultsCollection(results, names, 5)
+    results = CV_ResultsCollection(results, names, kwargs["cv_splits"])
     return results
 
 
