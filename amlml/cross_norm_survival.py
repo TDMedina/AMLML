@@ -82,7 +82,7 @@ def generate_loss_convergence_test(metric="cov", test_loss_slope=True,
 
 def lr_cyclic_step_calculator(sample_size, batch_size, epochs_per_cycle):
     """Calculate the steps required to synchronize CyclicLR steps with epochs."""
-    steps = ((sample_size // batch_size) + math.ceil(sample_size % batch_size)) * epochs_per_cycle
+    steps = math.ceil(sample_size / batch_size) * epochs_per_cycle
     step_up = math.floor(steps/2)
     step_down = math.ceil(steps/2)
     return step_up, step_down
