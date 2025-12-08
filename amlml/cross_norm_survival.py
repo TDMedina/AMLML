@@ -16,10 +16,12 @@ from sklearn.model_selection import StratifiedKFold
 from tqdm import tqdm
 
 import torch
-from torch.optim.lr_scheduler import CyclicLR
-from torch.nn import BCEWithLogitsLoss
+from torch.optim.lr_scheduler import CyclicLR, ConstantLR
+from torch.nn import BCEWithLogitsLoss, BCELoss
 from torch import sigmoid
 import torchtuples as tt
+
+from torch_lr_finder import LRFinder
 
 from pycox.models import CoxPH
 from pycox.evaluation import EvalSurv
@@ -28,11 +30,10 @@ from pycox.models.loss import CoxPHLoss
 from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import optimize_survival_splits, iterate_logrank_tests
-from amlml.data_loader import (NetworkDataset, main_loader,
-                               prepare_zscore_expression)
+from amlml.data_loader import NetworkDataset
 from amlml.cross_normalization import zscore_normalize_genes_by_group
 from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
-                              CV_Result, CV_ResultsCollection)
+                              CV_Result, CV_ResultsCollection, classify_by_hazard_at_threshold)
 
 
 ConvergeTest = namedtuple("ConvergeTest", ["passed", "score", "threshold"])
@@ -98,13 +99,18 @@ def cross_validation_run(dataset: NetworkDataset,
                          survival_splits=3, cov_threshold=0.01,
                          rel_slope_threshold=0.01,
                          batch_size=100, epochs=360, epochs_per_cycle=6,
-                         save_network=False, end_with_lr_cycle=False,
-                         classify=False, use_rmst=True, classification_threshold=1460,
+                         save_network=False,
+                         lr_init=None, constant_lr=False, end_with_lr_cycle=False,
+                         lr_cycle_mode="triangular",
+                         classify=False, hazard_classify=False,
+                         use_rmst=True, classification_threshold=1460,
                          minimum_penultimate_size=10, shrinkage_factor=10,
                          rmst_max_time=None, rmst_tukey_factor=None,
                          zero_params=False, kaiming_weights=False,
-                         bellows_normalization=True, remove_age_over=None):
+                         bellows_normalization=True,
+                         remove_age_over=None, restrict_tech=None):
     verbose = True
+    n_alphas = n_alphas + 1 if n_alphas is not None else None
     len_loss_convergence = epochs_per_cycle*3
     convergence_test = generate_loss_convergence_test(
         metric="cov",
@@ -113,15 +119,21 @@ def cross_validation_run(dataset: NetworkDataset,
         rel_slope_threshold=rel_slope_threshold,
         n_losses=len_loss_convergence
         )
+
     if remove_age_over is not None:
         dataset = dataset.filter_by_age_at_diagnosis(remove_age_over)
-    if classify:
+    if restrict_tech is not None:
+        dataset = dataset.filter_by_tech(restrict_tech)
+    if classify or hazard_classify:
         if use_rmst:
             dataset.estimate_durations_with_rmst(max_time=rmst_max_time,
                                                  tukey_factor=rmst_tukey_factor)
             dataset.classify_by_rmst_ci_interval(save=True)
         else:
             dataset = dataset.filter_low_censorship_and_classify_by_duration(classification_threshold)
+        if hazard_classify:
+            bce_loss = BCELoss()
+
     print(f"Running dataset: {dataset.name}")
     kf = StratifiedKFold(n_splits=cv_splits, random_state=10, shuffle=True)
     # kf = RepeatedStratifiedKFold(n_splits=5, random_state=10, n_repeats=10)
@@ -130,7 +142,6 @@ def cross_validation_run(dataset: NetworkDataset,
         print(f"Running fold {i}...")
         fold_data = dataset[train_fold]
         fold_data_val = dataset[val_fold]
-        lr_cycle_steps = len(fold_data)
 
         if iterate_alphas:
             print(f"    Calculating lasso penalties...")
@@ -140,7 +151,7 @@ def cross_validation_run(dataset: NetworkDataset,
                                                fold_data.outcomes,
                                                l1_ratio=l1_ratio,
                                                alpha_min_ratio=alpha_min_ratio,
-                                               n_alphas=n_alphas+1,
+                                               n_alphas=n_alphas,
                                                alphas=alphas)
             geneset = get_non_zero_genes(alpha_table)
         else:
@@ -176,8 +187,8 @@ def cross_validation_run(dataset: NetworkDataset,
             network = network_type(**network_parameters)
 
             # Start by using PyCox's lr_finder.
-            if classify:
-                lr_init = 1e-4
+            if lr_init is not None:
+                lr_init_ = lr_init
             else:
                 print("    Calculating learning rate...")
                 model = CoxPH(network, tt.optim.Adam)
@@ -188,22 +199,22 @@ def cross_validation_run(dataset: NetworkDataset,
                     #tolerance=10,
                     # verbose=verbose
                     )
-                lr_init = lrfinder.get_best_lr(lr_min=1e-6)
+                lr_init_ = lrfinder.get_best_lr(lr_min=1e-6, lr_max=1e-2)/10
                 del model
-                print(f"    Calculated learning rate = {lr_init}")
+                print(f"    Calculated learning rate = {lr_init_}")
 
             # Continue with base pytorch components to use more advanced LR tools.
             print("    Initializing model...")
-            optimizer = torch.optim.Adam(network.parameters(), lr=lr_init)
-            steps = lr_cyclic_step_calculator(len(alpha_data), batch_size, epochs_per_cycle)
-            steps = dict(zip(["step_size_up", "step_size_down"], steps))
-            lr_scheduler = CyclicLR(
-                optimizer, base_lr=lr_init/10, max_lr=lr_init*10,
-                # mode="exp_range", gamma=0.8, **steps, scale_mode="cycle",
-                mode="triangular2", **steps, scale_mode="iterations",
-                # mode="triangular", **steps, scale_mode="iterations"
-                # scale_mode="cycle",
-                )
+            optimizer = torch.optim.Adam(network.parameters(), lr=lr_init_)
+            if constant_lr:
+                lr_scheduler = ConstantLR(optimizer, factor=1)
+            else:
+                steps = lr_cyclic_step_calculator(len(alpha_data), batch_size, epochs_per_cycle)
+                steps = dict(zip(["step_size_up", "step_size_down"], steps))
+                lr_scheduler = CyclicLR(
+                    optimizer, base_lr=lr_init_/10, max_lr=lr_init_*10,
+                    mode=lr_cycle_mode, **steps, scale_mode="iterations",
+                    )
 
             loss_fn = BCEWithLogitsLoss() if classify else CoxPHLoss()
             run_loss = ((lambda predicted, batch_: loss_fn(predicted, batch_.classes)) if classify
@@ -225,7 +236,7 @@ def cross_validation_run(dataset: NetworkDataset,
                     optimizer.step()
                     lr_scheduler.step()
 
-                # Calculate validation loss.
+                # Calculate validation loss and ctd.
                 predicted_hazards_val = network(*alpha_val.network_args)
                 loss_val = run_loss(predicted_hazards_val, alpha_val)
                 losses_val.append(float(loss_val))
@@ -271,11 +282,17 @@ def cross_validation_run(dataset: NetworkDataset,
                     network=network if save_network else None,
                     pll_train=None,
                     pll_val=None,
-                    hazards=None,
+                    hazards_baseline=None,
+                    hazards_train=None,
+                    hazards_val=None,
                     ibs=None,
                     ctd=None,
                     risk_splits=None,
-                    logranks=None
+                    logranks=None,
+                    survival_train=None,
+                    survival_val=None,
+                    classify_loss_train = losses[-1],
+                    classify_loss_val = losses_val[-1]
                     ))
                 continue
 
@@ -283,12 +300,24 @@ def cross_validation_run(dataset: NetworkDataset,
             predicted_hazards_val = predicted_hazards_val.detach().numpy()
             baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
                                                         predicted_hazards)
-            survival = predict_survival_table(predicted_hazards_val,
-                                              baseline_hazards.cumulative)
+            survival_train = predict_survival_table(predicted_hazards,
+                                                    baseline_hazards.cumulative)
+            survival_val = predict_survival_table(predicted_hazards_val,
+                                                  baseline_hazards.cumulative)
+            if hazard_classify:
+                classes_train = classify_by_hazard_at_threshold(survival_train,
+                                                                dataset.class_split)
+                classes_val = classify_by_hazard_at_threshold(survival_val,
+                                                              dataset.class_split)
+                classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32).view(-1, 1),
+                                               alpha_data.classes)
+                classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32).view(-1, 1),
+                                             alpha_val.classes)
+            else:
+                classes_train, classes_val = None, None
+                classify_loss_train, classify_loss_val = None, None
 
-            # outcomes_val = np.array(outcomes_val)
-
-            ev = EvalSurv(survival,
+            ev = EvalSurv(survival_val,
                           alpha_val.durations.detach().numpy(),
                           alpha_val.events.detach().numpy(),
                           censor_surv="km")
@@ -303,15 +332,20 @@ def cross_validation_run(dataset: NetworkDataset,
 
             # ev.integrated_nbll(time_grid)
 
-            km_val_df = alpha_val.outcome_target_table
-            km_val_df = km_val_df.assign(risk=predicted_hazards_val)
+            km_df = alpha_data.outcome_target_table
+            km_df = km_df.assign(risk=predicted_hazards)
 
             print("    Calculating survival split...")
-            optimal_splits = optimize_survival_splits(km_val_df, n_groups=survival_splits,
+            optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
                                                       method="Brute")
             risk_splits = np.cumulative_sum(optimal_splits)
+            km_val_df = alpha_val.outcome_target_table
+            km_val_df["risk"] = predicted_hazards_val
+            groups = ascii_uppercase[:len(risk_splits) + 1]
+            km_val_df["group"] = groups[0]
+            for group, cutoff in zip(groups[1:], risk_splits):
+                km_val_df.loc[km_val_df["risk"] > cutoff, "group"] = group
             logranks = iterate_logrank_tests(km_val_df)
-
 
             results.append(CV_Result(
                 fold=i,
@@ -328,11 +362,19 @@ def cross_validation_run(dataset: NetworkDataset,
                                                predicted_hazards_val),
                 network=network if save_network else None,
                 name=dataset.name,
-                hazards=baseline_hazards,
+                hazards_train=predicted_hazards,
+                hazards_val=predicted_hazards_val,
+                hazards_baseline=baseline_hazards,
                 ibs=ibs,
                 ctd=ctd,
                 risk_splits=risk_splits,
-                logranks=logranks
+                logranks=logranks,
+                survival_train=survival_train,
+                survival_val=survival_val,
+                classes_train=classes_train,
+                classes_val=classes_val,
+                classify_loss_train=classify_loss_train,
+                classify_loss_val=classify_loss_val,
                 ))
     results = CV_ResultsCollection(results, None, cv_splits)
     return results
@@ -351,102 +393,82 @@ def cv_multiple(datasets: list[tuple[Callable, NetworkDataset]], **kwargs):
     return results
 
 
-# %% Results parsing.
-def make_results_table(results):
-    fields = ["epochs", "pll", "ctd", "ibs"]
-    parsed = []
-    for fold, alpha_dict in results.items():
-        for alpha, result_dict in alpha_dict.items():
-            entry = ([fold, alpha, len(result_dict["genes"].split(","))]
-                     + [result_dict[x] for x in fields])
-            entry += [tuple(sorted(result_dict["risk_splits"]))]
-            # print(fold, alpha, result_dict["km_logrank"].keys())
-            entry += [result_dict["km_logrank"][tuple(x)].p_value
-                      if tuple(x) in result_dict["km_logrank"] else None
-                      for x in ["AB", "BC", "AC"]]
-            parsed.append(entry)
-    cols = ["fold", "alpha", "gene_count", *fields, "risk_splits", "km_logrank_AB",
-            "km_logrank_BC", "km_logrank_AC"]
-    table = pd.DataFrame(parsed, columns=cols)
-    table["group"] = [i for _ in range(len(results.keys()))
-                      for i in ascii_uppercase[:len(list(results.values())[0].keys())]]
-    table.set_index(["fold", "group", "alpha"], inplace=True)
-    return table
-
-
-def plot_survival_splits(results_table):
-    splits = results_table[["gene_count"]].copy()
-    splits["split1"] = [x[0] for x in results_table.risk_splits]
-    splits["split2"] = [x[1] for x in results_table.risk_splits]
-    fig = go.Figure()
-    for fold in splits.index.unique(level="fold"):
-        data = splits.loc[idx[fold, :, :],]
-        fig.add_trace(go.Bar(x=data.reset_index()["group"],
-                             y=data.split1,
-                             offsetgroup=fold,
-                             marker_color="red",
-                             marker_line_color="red"))
-        fig.add_trace(go.Bar(x=data.reset_index()["group"],
-                             y=data.split2-data.split1,
-                             offsetgroup=fold,
-                             marker_color="blue",
-                             marker_line_color="blue"))
-        fig.add_trace(go.Bar(x=data.reset_index()["group"],
-                             y=1-data.split2,
-                             offsetgroup=fold,
-                             marker_color="green",
-                             marker_line_color="green"))
-    fig.update_layout(barmode="stack")
-
-    logranks = ["km_logrank_AB", "km_logrank_BC", "km_logrank_AC"]
-    splits = splits.join(results_table[logranks])
-    fig3 = go.Figure()
-    for logrank in logranks:
-        fig3.add_trace(go.Scatter(x=splits.gene_count, y=splits[logrank],
-                                  mode="markers"))
-    melted = pd.melt(splits[["gene_count"]+logranks], id_vars="gene_count")
-    melted["value"] = np.log10(melted["value"])
-    fig4 = px.scatter(melted, x="gene_count", y="value", color="variable")
-    fig4.add_trace(go.Scatter(x=[0, 1600], y=[np.log10(0.05)]*2, mode="lines",
-                              marker_line_color="red"))
-    return fig, fig4
-
-
-def plot_performance_metrics(results_table, plot_mean=False, plot_median=False):
-    metrics = ["epochs", "pll", "ctd", "ibs"]
-    trimmed = results_table.copy()
-    trimmed["pll"] = [max(x, -20) for x in results_table["pll"]]
-    title = "Gene counts vs metric"
-    if plot_mean:
-        trimmed = make_mean_results_table(trimmed)
-        title += " means"
-    elif plot_median:
-        trimmed = make_median_results_table(trimmed)
-        title += " medians"
-    figs = px.scatter(pd.melt(trimmed[["gene_count"] + metrics], id_vars=["gene_count"]),
-                      x="gene_count", y="value", trendline="lowess",
-                      facet_col="variable", facet_col_wrap=2)
-    figs.update_layout(title=title)
-    figs.update_yaxes(matches=None)
-    figs.for_each_yaxis(lambda yaxis: yaxis.update(showticklabels=True))
-    return figs
-
-
-if __name__ == "__main__":
-    train, test = main_loader(prepare_zscore_expression)
-
-
-# %% Single run.
-    cv_results = cross_validation_run(
-        dataset=train,
-        include_clinical_variables=False,
-        covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
-        iterate_alphas=False,
-        survival_splits=2,
-        cov_threshold=0.01,
-        rel_slope_threshold=0.01,
-        batch_size=100,
-        epochs=360,
-        epochs_per_cycle=6
-        )
-
+# # %% Results parsing.
+# def make_results_table(results):
+#     fields = ["epochs", "pll", "ctd", "ibs"]
+#     parsed = []
+#     for fold, alpha_dict in results.items():
+#         for alpha, result_dict in alpha_dict.items():
+#             entry = ([fold, alpha, len(result_dict["genes"].split(","))]
+#                      + [result_dict[x] for x in fields])
+#             entry += [tuple(sorted(result_dict["risk_splits"]))]
+#             # print(fold, alpha, result_dict["km_logrank"].keys())
+#             entry += [result_dict["km_logrank"][tuple(x)].p_value
+#                       if tuple(x) in result_dict["km_logrank"] else None
+#                       for x in ["AB", "BC", "AC"]]
+#             parsed.append(entry)
+#     cols = ["fold", "alpha", "gene_count", *fields, "risk_splits", "km_logrank_AB",
+#             "km_logrank_BC", "km_logrank_AC"]
+#     table = pd.DataFrame(parsed, columns=cols)
+#     table["group"] = [i for _ in range(len(results.keys()))
+#                       for i in ascii_uppercase[:len(list(results.values())[0].keys())]]
+#     table.set_index(["fold", "group", "alpha"], inplace=True)
+#     return table
+#
+#
+# def plot_survival_splits(results_table):
+#     splits = results_table[["gene_count"]].copy()
+#     splits["split1"] = [x[0] for x in results_table.risk_splits]
+#     splits["split2"] = [x[1] for x in results_table.risk_splits]
+#     fig = go.Figure()
+#     for fold in splits.index.unique(level="fold"):
+#         data = splits.loc[idx[fold, :, :],]
+#         fig.add_trace(go.Bar(x=data.reset_index()["group"],
+#                              y=data.split1,
+#                              offsetgroup=fold,
+#                              marker_color="red",
+#                              marker_line_color="red"))
+#         fig.add_trace(go.Bar(x=data.reset_index()["group"],
+#                              y=data.split2-data.split1,
+#                              offsetgroup=fold,
+#                              marker_color="blue",
+#                              marker_line_color="blue"))
+#         fig.add_trace(go.Bar(x=data.reset_index()["group"],
+#                              y=1-data.split2,
+#                              offsetgroup=fold,
+#                              marker_color="green",
+#                              marker_line_color="green"))
+#     fig.update_layout(barmode="stack")
+#
+#     logranks = ["km_logrank_AB", "km_logrank_BC", "km_logrank_AC"]
+#     splits = splits.join(results_table[logranks])
+#     fig3 = go.Figure()
+#     for logrank in logranks:
+#         fig3.add_trace(go.Scatter(x=splits.gene_count, y=splits[logrank],
+#                                   mode="markers"))
+#     melted = pd.melt(splits[["gene_count"]+logranks], id_vars="gene_count")
+#     melted["value"] = np.log10(melted["value"])
+#     fig4 = px.scatter(melted, x="gene_count", y="value", color="variable")
+#     fig4.add_trace(go.Scatter(x=[0, 1600], y=[np.log10(0.05)]*2, mode="lines",
+#                               marker_line_color="red"))
+#     return fig, fig4
+#
+#
+# def plot_performance_metrics(results_table, plot_mean=False, plot_median=False):
+#     metrics = ["epochs", "pll", "ctd", "ibs"]
+#     trimmed = results_table.copy()
+#     trimmed["pll"] = [max(x, -20) for x in results_table["pll"]]
+#     title = "Gene counts vs metric"
+#     if plot_mean:
+#         trimmed = make_mean_results_table(trimmed)
+#         title += " means"
+#     elif plot_median:
+#         trimmed = make_median_results_table(trimmed)
+#         title += " medians"
+#     figs = px.scatter(pd.melt(trimmed[["gene_count"] + metrics], id_vars=["gene_count"]),
+#                       x="gene_count", y="value", trendline="lowess",
+#                       facet_col="variable", facet_col_wrap=2)
+#     figs.update_layout(title=title)
+#     figs.update_yaxes(matches=None)
+#     figs.for_each_yaxis(lambda yaxis: yaxis.update(showticklabels=True))
+#     return figs
