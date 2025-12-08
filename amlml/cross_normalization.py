@@ -36,9 +36,12 @@ def zscore_normalize_genes_by_group(data):
     data = data.copy()
     data["int_dex"] = range(data.shape[0])
     data.set_index(["int_dex", "Tech"], append=True, inplace=True)
-    rna = zscore_normalize(data.loc[idx[:, :, "RNAseq"]])
-    array = zscore_normalize(data.loc[idx[:, :, "Microarray"]])
-    data = pd.concat([rna, array])
+    techs = [zscore_normalize(data.loc[idx[:, :, tech]]) for tech in
+             data.index.get_level_values("Tech").unique()]
+        # rna = zscore_normalize(data.loc[idx[:, :, "RNAseq"]])
+        # array = zscore_normalize(data.loc[idx[:, :, "Microarray"]])
+    # data = pd.concat([rna, array])
+    data = pd.concat(techs)
     data.sort_index(level=1, inplace=True)
     data = data.droplevel(level=1)
     return data
