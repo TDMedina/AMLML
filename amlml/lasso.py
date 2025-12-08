@@ -54,7 +54,7 @@ def test_lasso_penalties(data, outcomes, l1_ratio=1, alpha_min_ratio=0.01,
     # cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=0.00001,
     #                                    n_alphas=20, verbose=True)
     cox_lasso = CoxnetSurvivalAnalysis(l1_ratio=l1_ratio, alpha_min_ratio=alpha_min_ratio,
-                                       n_alphas=n_alphas, verbose=True)
+                                       n_alphas=n_alphas, alphas=alphas, verbose=True)
     cox_lasso.fit(data, outcomes)
     coefficients_lasso = pd.DataFrame(cox_lasso.coef_, index=data.columns,
                                       columns=np.round(cox_lasso.alphas_, 5))
