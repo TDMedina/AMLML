@@ -39,7 +39,8 @@ DataLabels = namedtuple("DataLabels", ["index", "columns", "tech"])
 class NetworkDataset(Dataset):
     def __init__(self, expression, durations, events,
                  categoricals, non_categoricals,
-                 index, tech, genes, name=None, classes=None,
+                 index, tech, genes, name=None,
+                 classes=None, class_threshold=None,
                  rmst=False, max_time=None, tukey_factor=3):
         self.expression = expression
         self.durations = durations
@@ -52,6 +53,8 @@ class NetworkDataset(Dataset):
         self.genes = genes
 
         self.classes = classes
+        self.class_threshold = class_threshold
+
         self.name = name
 
         self.rmst = None
@@ -67,18 +70,22 @@ class NetworkDataset(Dataset):
 
     def __getitem__(self, index):
         classes = self.classes[index] if self.classes is not None else None
+        class_threshold = self.class_threshold if self.class_threshold is not None else None
         return NetworkDataset(*[x[index] for x in self.data],
                               index=self.index[index],
                               tech=self.tech.iloc[index],
                               classes=classes,
+                              class_threshold=class_threshold,
                               genes=self.genes)
 
     def __getitems__(self, indices):
         classes = self.classes[indices] if self.classes is not None else None
+        class_threshold = self.class_threshold if self.class_threshold is not None else None
         return NetworkDataset(*[x[indices] for x in self.data],
                               index=self.index[indices],
                               tech=self.tech.iloc[indices],
                               classes=classes,
+                              class_threshold=class_threshold,
                               genes=self.genes)
 
     @property
@@ -246,6 +253,7 @@ class NetworkDataset(Dataset):
         self.rmst["groups"] = self.rmst.durations >= optimum.durations
         if save:
             self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
+            self.class_split = optimum.durations
         return self.rmst
 
     def classify_by_duration(self, threshold=1460, save=False):
@@ -261,6 +269,7 @@ class NetworkDataset(Dataset):
         data = self[classes.index]
         data.name = self.name + "_no_low_censor"
         data.classes = tensor(classes["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
+        data.class_split = threshold
         return data
 
     def filter_by_age_at_diagnosis(self, age_in_days, keep_less_than=True):
@@ -268,8 +277,15 @@ class NetworkDataset(Dataset):
             index = self.non_categoricals[:, 0, 0] < age_in_days
         else:
             index = self.non_categoricals[:, 0, 0] >= age_in_days
+        index = np.where(index)[0]
         dataset = self[index]
         dataset.name = self.name + "_age_filtered"
+        return dataset
+
+    def filter_by_tech(self, tech):
+        index = np.where(self.tech == tech)
+        dataset = self[index]
+        dataset.name = self.name + "_tech_filtered"
         return dataset
 
     @rmst_method
@@ -419,12 +435,13 @@ def prepare_log2_expression(data, concatenate=True, as_tensor=True):
     return all_expression
 
 
-def prepare_zscore_expression(data):
+def prepare_zscore_expression(data, as_tensor=True):
     rna, array = prepare_log2_expression(data, concatenate=False, as_tensor=False)
     rna = zscore_normalize(rna)
     array = zscore_normalize(array)
     expression = pd.concat([rna, array], axis=0)
-    expression = tensor(expression.to_numpy(), dtype=float32)
+    if as_tensor:
+        expression = tensor(expression.to_numpy(), dtype=float32)
     return expression
 
     # rna_expression = zscore_normalize(rna_expression)
@@ -450,6 +467,11 @@ def prepare_npn_expression(data):
 
 
 def prepare_supermodel_expression(data, with_zscore=False):
+    if with_zscore:
+        expression = prepare_zscore_expression(data, as_tensor=False)
+        expression.columns = pd.MultiIndex.from_product([["Expression"],
+                                                         expression.columns])
+        data = data[["Covariates", "Outcomes", "Tech"]].join(expression)
     rna, array = separate_tech(data)
     rna = np.stack([np.array(rna.Expression),
                     np.zeros(rna.Expression.shape)],
@@ -460,6 +482,10 @@ def prepare_supermodel_expression(data, with_zscore=False):
     expression = np.concat([rna, array], axis=1)
     expression = tensor(expression, dtype=float32).permute(1, 0, 2)
     return expression
+
+
+def prepare_zupermodel_expression(data):
+    return prepare_supermodel_expression(data, with_zscore=True)
 
 
 def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression,
@@ -608,12 +634,17 @@ def main_loader(normalization: Callable, verbose=True):
 def normalization_generator(methods=None, verbose=False):
     if methods is None:
         methods = [prepare_log2_expression, prepare_zscore_expression,
-                   prepare_npn_expression, prepare_supermodel_expression]
+                   prepare_npn_expression, prepare_supermodel_expression,
+                   prepare_zupermodel_expression]
     if verbose:
         print("Reading data...")
     data, cols = read_model_data_pickle()
     for norm_method in methods:
-        network_type = SuperModel if norm_method == prepare_supermodel_expression else CrossNormalizedModel
+        if (norm_method == prepare_supermodel_expression
+                or norm_method == prepare_zupermodel_expression):
+            network_type = SuperModel
+        else:
+            network_type = CrossNormalizedModel
         if verbose:
             print(f"Preparing method {norm_method.__name__}")
         train, test = prepare_data(data, cols, norm_method)
