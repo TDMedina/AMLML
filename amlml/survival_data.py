@@ -2,8 +2,14 @@
 import pandas as pd
 import numpy as np
 from numpy import nan
+import torch
 from torch import tensor, float32
 import yaml
+
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda:0")
+else:
+    DEVICE = torch.device("cpu")
 
 def read_clinical_data(data_file, column_yaml):
     cols = read_clinical_columns(column_yaml)
@@ -30,7 +36,7 @@ def read_clinical_columns(col_yaml):
 
 
 def prepare_outcomes(outcome_data):
-    outcome_data = tensor(outcome_data.T.astype(float), dtype=float32)
+    outcome_data = tensor(outcome_data.T.astype(float), dtype=float32, device=DEVICE)
     outcome_data = (outcome_data[0], outcome_data[1])
     return outcome_data
 
