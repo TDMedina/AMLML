@@ -33,6 +33,12 @@ from amlml.km import optimize_survival_splits
 # Dataset = namedtuple("Dataset", ["expression", "outcomes",
 #                                  "categoricals", "non_categoricals",
 #                                  "reference"])
+
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda:0")
+else:
+    DEVICE = torch.device("cpu")
+
 DataLabels = namedtuple("DataLabels", ["index", "columns", "tech"])
 
 
@@ -104,13 +110,14 @@ class NetworkDataset(Dataset):
 
     @property
     def outcome_target_table(self):
-        return pd.DataFrame({"durations": self.durations.detach().numpy(),
-                             "events": self.events.detach().numpy()})
+        return pd.DataFrame({"durations": self.durations.cpu().detach().numpy(),
+                             "events": self.events.cpu().detach().numpy()})
 
     @property
     def class_table(self):
         table = self.outcome_target_table
         table["groups"] = self.classes.squeeze().tolist()
+        table.index = self.index
         return table
 
     @property
@@ -123,10 +130,10 @@ class NetworkDataset(Dataset):
 
     def make_expression_table(self):
         if len(self.expression.shape) == 3:
-            table = pd.DataFrame(self.expression.sum(axis=1), index=self.index,
+            table = pd.DataFrame(self.expression.cpu().sum(axis=1), index=self.index,
                                  columns=self.genes)
         else:
-            table = pd.DataFrame(self.expression, index=self.index, columns=self.genes)
+            table = pd.DataFrame(self.expression.cpu(), index=self.index, columns=self.genes)
         table = table.join(self.tech)
         return table
 
@@ -135,11 +142,11 @@ class NetworkDataset(Dataset):
         return self.expression, self.categoricals, self.non_categoricals
 
     def subset_genes(self, genes):
-        data = NetworkDataset(self.expression[..., genes],
-                              self.durations, self.events,
-                              self.categoricals, self.non_categoricals,
-                              self.index, self.tech, genes,
-                              classes=self.classes)
+        data = NetworkDataset(expression=self.expression[..., genes],
+                              durations=self.durations, events=self.events,
+                              categoricals=self.categoricals, non_categoricals=self.non_categoricals,
+                              index=self.index, tech=self.tech, genes=genes,
+                              classes=self.classes, class_threshold=self.class_threshold)
         return data
 
     def generate_batches(self, batch_size, shuffle_=True):
@@ -252,8 +259,8 @@ class NetworkDataset(Dataset):
         optimum, _, _ = self.optimize_rmst_class_cis(plot=False)
         self.rmst["groups"] = self.rmst.durations >= optimum.durations
         if save:
-            self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
-            self.class_split = optimum.durations
+            self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32, device=DEVICE).view([-1, 1])
+            self.class_threshold = optimum.durations
         return self.rmst
 
     def classify_by_duration(self, threshold=1460, save=False):
@@ -268,8 +275,8 @@ class NetworkDataset(Dataset):
         classes = self.classify_by_duration(threshold)
         data = self[classes.index]
         data.name = self.name + "_no_low_censor"
-        data.classes = tensor(classes["groups"].to_numpy(), dtype=torch.float32).view([-1, 1])
-        data.class_split = threshold
+        data.classes = tensor(classes["groups"].to_numpy(), dtype=torch.float32, device=DEVICE).view([-1, 1])
+        data.class_threshold = threshold
         return data
 
     def filter_by_age_at_diagnosis(self, age_in_days, keep_less_than=True):
@@ -511,7 +518,7 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
             expression = tensor(data.Expression, dtype=float32)
         else:
             expression = normalization(data_split)
-
+        expression = expression.to(DEVICE)
         # Outcomes
         outcomes = data_split.Outcomes
         outcomes.columns = ["event", "duration"]
@@ -530,12 +537,12 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
         for x in categoricals:
             categoricals[x] = pd.Categorical(categoricals[x])
         code_categoricals(categoricals)
-        categoricals = tensor(categoricals.to_numpy(), dtype=torch.int32)
+        categoricals = tensor(categoricals.to_numpy(), dtype=torch.int32, device=DEVICE)
 
         # Non-categorical covariates.
         noncats = [x for x in data_split.Covariates if cols["Covariates"][x] != "categorical"]
         non_categoricals = data_split.Covariates[noncats]
-        non_categoricals = tensor(add_nan_mask_stack(non_categoricals), dtype=float32)
+        non_categoricals = tensor(add_nan_mask_stack(non_categoricals), dtype=float32, device=DEVICE)
         non_categoricals = non_categoricals.permute(1, 0, 2)
 
         # dataset = Dataset(expression, outcomes, categoricals, non_categoricals, data_labels)
