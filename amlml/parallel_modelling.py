@@ -1,6 +1,6 @@
 import torch
 from torch import nn, vmap
-from amlml.modelling import ConnectedLayers
+from amlml.modelling import ConnectedLayers, ShallowConnectedLayers
 
 
 class ParallelBellowsLayers(nn.Module):
@@ -29,8 +29,8 @@ class ParallelBellowsLayers(nn.Module):
     def __repr__(self):
         string = super().__repr__()
         string = string.split("\n")
-        layer1 = f"  (expand): vmap(Linear(in_features=1, out_features={self.n_expansion}))"
-        layer2 = f"  (shrink): vmap(Linear(in_features={self.n_expansion}, out_features=1))"
+        layer1 = f"  (expand): vmap({self.n_genes}*{self.n_tech} * Linear(in_features=1, out_features={self.n_expansion}))"
+        layer2 = f"  (shrink): vmap({self.n_genes}*{self.n_tech} * Linear(in_features={self.n_expansion}, out_features=1))"
         string.insert(1, layer2)
         string.insert(1, layer1)
         string = "\n".join(string)
@@ -87,7 +87,7 @@ class ParallelGeneLayers(nn.Module):
     def __repr__(self):
         string = super().__repr__()
         string = string.split("\n")
-        layer = f"  (combine_gene): vmap(Linear(in_features={self.n_tech}, out_features=1))"
+        layer = f"  (combine_gene): vmap({self.n_genes} * Linear(in_features={self.n_tech}, out_features=1))"
         string.insert(1, layer)
         string = "\n".join(string)
         return string
@@ -192,7 +192,7 @@ class ClinicalMissingMask(nn.Module):
     def __repr__(self):
         string = super().__repr__()
         string = string.split("\n")
-        layer = f"  (mask_covariate): vmap(Linear(in_features=2, out_features=1))"
+        layer = f"  (mask_covariate): vmap({self.n_variables} * Linear(in_features=2, out_features=1))"
         string.insert(1, layer)
         string = "\n".join(string)
         return string
@@ -232,7 +232,7 @@ class SuperModel(nn.Module):
                  include_clinical_variables=True, n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
                  zero_params=False, kaiming_weights=False, output_xavier=False,
-                 bellows_normalization=True):
+                 bellows_normalization=True, use_shallow=False, dropout=0.2):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -250,11 +250,15 @@ class SuperModel(nn.Module):
             self.expression_model = ParallelGeneLayers(n_genes, n_tech,
                                                        zero_params=zero_params,
                                                        kaiming_weights=kaiming_weights)
-        self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
-                                                minimum_penultimate_size, final_size,
-                                                zero_params=zero_params,
-                                                kaiming_weights=kaiming_weights,
-                                                output_xavier=output_xavier)
+        if use_shallow:
+            self.connected_layers = ShallowConnectedLayers(dnn_input_dim, kaiming_weights=kaiming_weights,
+                                                           output_xavier=output_xavier, dropout=dropout)
+        else:
+            self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
+                                                    minimum_penultimate_size, final_size,
+                                                    zero_params=zero_params,
+                                                    kaiming_weights=kaiming_weights,
+                                                    output_xavier=output_xavier, dropout=dropout)
         # self.output_activator = nn.Sigmoid()
 
     # def forward(self, input_tuple):
@@ -273,7 +277,8 @@ class CrossNormalizedModel(nn.Module):
                  shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
                  include_clinical_variables=True, n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
-                 zero_params=False, kaiming_weights=False, output_xavier=False):
+                 zero_params=False, kaiming_weights=False, output_xavier=False, use_shallow=False,
+                 dropout=0.2):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -283,11 +288,15 @@ class CrossNormalizedModel(nn.Module):
             dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
                                                 n_clinical-3)
-        self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
-                                                minimum_penultimate_size, final_size,
-                                                zero_params=zero_params,
-                                                kaiming_weights=kaiming_weights,
-                                                output_xavier=output_xavier)
+        if use_shallow:
+            self.connected_layers = ShallowConnectedLayers(dnn_input_dim, kaiming_weights=kaiming_weights,
+                                                           output_xavier=output_xavier, dropout=dropout)
+        else:
+            self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
+                                                    minimum_penultimate_size, final_size,
+                                                    zero_params=zero_params,
+                                                    kaiming_weights=kaiming_weights,
+                                                    output_xavier=output_xavier, dropout=dropout)
 
     def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
         if self.includes_clinical:
