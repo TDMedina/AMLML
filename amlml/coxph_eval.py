@@ -72,11 +72,11 @@ def classify_by_hazard_at_threshold(survival, threshold):
 class CV_Result:
     def __init__(self, fold, alpha, alpha_index, genes,
                  n_epochs, lrs, losses_train, losses_val,
-                 pll_train, pll_val, network,
-                 hazards_train, hazards_val, hazards_baseline,
-                 ctd, ibs, risk_splits,
-                 logranks,
-                 survival_train, survival_val, first_weights,
+                 pll_train=None, pll_val=None, network=None,
+                 hazards_train=None, hazards_val=None, hazards_baseline=None,
+                 ctd=None, ibs=None,
+                 risk_splits=None, logranks=None,
+                 survival_train=None, survival_val=None, first_weights=None,
                  classes_train=None, classes_val=None,
                  classify_loss_train=None, classify_loss_val=None,
                  parameters=None, name=None):

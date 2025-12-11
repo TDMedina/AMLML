@@ -114,7 +114,7 @@ def cross_validation_run(dataset: NetworkDataset,
                          include_clinical_variables=True, covariate_cardinality=None,
                          use_coxnet_alphas=True, coxnet_l1_ratio=1,
                          coxnet_alpha_min_ratio=0.01, coxnet_n_alphas=20, coxnet_alphas=None,
-                         network_l1_reg=False, network_l1_alphas=None,
+                         network_l1_reg=False, network_l1_alphas=None, network_weight_decay=1e-4,
                          survival_splits=2, cov_threshold=0.01,
                          rel_slope_threshold=0.01,
                          batch_size=100, epochs=360, epochs_per_cycle=6,
@@ -132,7 +132,7 @@ def cross_validation_run(dataset: NetworkDataset,
                          ):
     coxnet_n_alphas = coxnet_n_alphas + 1 if coxnet_n_alphas is not None else None
     network_l1_alphas = [0] if network_l1_alphas is None else network_l1_alphas
-    len_loss_convergence = epochs_per_cycle*3
+    len_loss_convergence = epochs_per_cycle
     convergence_test = generate_loss_convergence_test(
         metric="cov",
         test_loss_slope=True,
@@ -156,10 +156,16 @@ def cross_validation_run(dataset: NetworkDataset,
             bce_loss = BCELoss()
 
     print(f"Running dataset: {dataset.name}")
-    kf = StratifiedKFold(n_splits=cv_splits, random_state=10, shuffle=True)
+    if cv_splits == 1:
+        kf = StratifiedKFold(n_splits=cv_splits+1, random_state=10, shuffle=True)
+        splits = kf.split(dataset.expression, dataset.tech)
+        splits = list(splits)[0:1]
+    else:
+        kf = StratifiedKFold(n_splits=cv_splits, random_state=10, shuffle=True)
+        splits = kf.split(dataset.expression, dataset.tech)
     # kf = RepeatedStratifiedKFold(n_splits=5, random_state=10, n_repeats=10)
     results = []
-    for i, (train_fold, val_fold) in enumerate(kf.split(dataset.expression, dataset.tech)):
+    for i, (train_fold, val_fold) in enumerate(splits):
         print(f"Running fold {i}...")
         fold_data = dataset[train_fold]
         fold_data_val = dataset[val_fold]
@@ -225,13 +231,13 @@ def cross_validation_run(dataset: NetworkDataset,
                     #tolerance=10,
                     # verbose=verbose
                     )
-                lr_init_ = lrfinder.get_best_lr(lr_min=1e-6, lr_max=1e-2)/10
+                lr_init_ = lrfinder.get_best_lr(lr_min=1e-4, lr_max=1e-2)/10
                 del model
                 print(f"    Calculated learning rate = {lr_init_}")
 
             # Continue with base pytorch components to use more advanced LR tools.
             print("    Initializing model...")
-            optimizer = torch.optim.Adam(network.parameters(), lr=lr_init_)
+            optimizer = torch.optim.Adam(network.parameters(), lr=lr_init_, weight_decay=network_weight_decay)
             if constant_lr:
                 lr_scheduler = ConstantLR(optimizer, factor=1)
             else:
@@ -243,7 +249,7 @@ def cross_validation_run(dataset: NetworkDataset,
                     )
 
             run_loss = generate_loss_function(classify)
-            losses = []
+            losses_train = []
             losses_val = []
             learning_rates = []
             print("    Training...")
@@ -251,52 +257,127 @@ def cross_validation_run(dataset: NetworkDataset,
                             postfix={"Loss": "0", "Var": "--", "Slope": "--"},
                             dynamic_ncols=True, position=0, leave=True)
             for epoch in progress:
+                epoch_loss = torch.tensor(0.0, device=DEVICE)
                 for batch in alpha_data.generate_batches(batch_size, shuffle_=True):
                     learning_rates.append(lr_scheduler.get_last_lr())
                     optimizer.zero_grad()
                     predictions_train = network(*batch.network_args)
                     loss = run_loss(predictions_train, batch)
+                    epoch_loss += loss * len(batch)
                     if network_l1_reg:
-                        l1_loss = loss + alpha * network.connected_layers.layers[0].weight.abs().sum()
-                        l1_loss.backward()
-                    else:
-                        loss.backward()
+                        loss = loss + alpha * network.connected_layers.layers[0].weight.abs().sum()
+                    loss.backward()
+                    torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=5.0)
                     optimizer.step()
                     lr_scheduler.step()
+                epoch_loss = (epoch_loss / len(alpha_data))
+                losses_train.append(epoch_loss)
 
-                # Calculate validation loss and ctd.
-                predictions_val = network(*alpha_val.network_args)
-                loss_val = run_loss(predictions_val, alpha_val)
-                losses_val.append(float(loss_val.cpu().detach()))
+                # Calculate validation loss.
+                with torch.no_grad():
+                    predictions_val = network(*alpha_val.network_args)
+                    loss_val = run_loss(predictions_val, alpha_val)
+                    losses_val.append(loss_val)
 
-                # Track epoch loss and check loss convergence.
-                loss_val = float(loss.cpu().detach())
-                losses.append(loss_val)
-                if len(losses) >= len_loss_convergence:
-                    converge_check = convergence_test(losses[-len_loss_convergence:])
-                    progress.set_postfix({"Loss": f"{loss_val:.3f}",
-                                          "Var": f"{converge_check.score[0]:.4f}",
-                                          "Slope": f"{converge_check.score[1]:.4f}"})
-                    if (converge_check.passed and
-                            (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)):
-                        break
-                else:
-                    progress.set_postfix({"Loss": f"{loss_val:.3f}",
-                                          "Var": "--",
-                                          "Slope": "--"})
+                    # Track epoch loss and check loss convergence.
+                    if len(losses_train) >= len_loss_convergence:
+                        converge_check = convergence_test(torch.stack(losses_train[-len_loss_convergence:]).cpu().numpy())
+                        progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}",
+                                              "Var": f"{converge_check.score[0]:.4f}",
+                                              "Slope": f"{converge_check.score[1]:.4f}"})
+                        if (converge_check.passed and
+                                (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)):
+                            break
+                    else:
+                        progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}",
+                                              "Var": "--",
+                                              "Slope": "--"})
 
             # Evaluate.
-            first_weights = network.connected_layers.layers[0].weight.cpu().detach().numpy()
-            predictions_train = network(*alpha_data.network_args)
-            predictions_val = network(*alpha_val.network_args)
+            with torch.no_grad():
+                losses_train = [x.item() for x in losses_train]
+                losses_val = [x.item() for x in losses_val]
+                first_weights = network.connected_layers.layers[0].weight.cpu().numpy()
+                predictions_train = network(*alpha_data.network_args)
+                predictions_val = network(*alpha_val.network_args)
 
-            if classify:
-                classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
-                                                 sigmoid(predictions_train).squeeze().tolist()),
-                                             columns=["Training", "Predicted"])
-                classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
-                                               sigmoid(predictions_val).squeeze().tolist()),
-                                           columns=["Validation", "Predicted"])
+                if classify:
+                    classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
+                                                     sigmoid(predictions_train).squeeze().tolist()),
+                                                 columns=["Training", "Predicted"])
+                    classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
+                                                   sigmoid(predictions_val).squeeze().tolist()),
+                                               columns=["Validation", "Predicted"])
+                    results.append(CV_Result(
+                        fold=i,
+                        alpha=alpha,
+                        alpha_index=j,
+                        genes=genes,
+                        n_epochs=epoch,
+                        lrs=[float(x[0]) for x in learning_rates],
+                        losses_train=losses_train,
+                        losses_val=losses_val,
+                        name=dataset.name,
+                        classes_train=classes_train,
+                        classes_val=classes_val,
+                        network=network if save_network else None,
+                        classify_loss_train = losses_train[-1],
+                        classify_loss_val = losses_val[-1],
+                        first_weights=first_weights
+                        ))
+                    continue
+
+                predictions_train = predictions_train.cpu().numpy()
+                predictions_val = predictions_val.cpu().numpy()
+                baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
+                                                            predictions_train)
+                survival_train = predict_survival_table(predictions_train,
+                                                        baseline_hazards.cumulative)
+                survival_val = predict_survival_table(predictions_val,
+                                                      baseline_hazards.cumulative)
+                if hazard_classify:
+                    classes_train = classify_by_hazard_at_threshold(survival_train,
+                                                                    dataset.class_threshold)
+                    classes_val = classify_by_hazard_at_threshold(survival_val,
+                                                                  dataset.class_threshold)
+                    classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
+                                                   alpha_data.classes)
+                    classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
+                                                 alpha_val.classes)
+                else:
+                    classes_train, classes_val = None, None
+                    classify_loss_train, classify_loss_val = None, None
+
+                ev = EvalSurv(survival_val,
+                              alpha_val.durations.cpu().numpy(),
+                              alpha_val.events.cpu().numpy(),
+                              censor_surv="km")
+                ctd = ev.concordance_td()
+
+                time_grid = np.linspace(float(alpha_val.durations.min()),
+                                        float(alpha_val.durations.max()),
+                                        100)
+                brier_scores = ev.brier_score(time_grid)
+                ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
+                       / (brier_scores.index[-1] - brier_scores.index[0]))
+
+                # ev.integrated_nbll(time_grid)
+
+                km_df = alpha_data.outcome_target_table
+                km_df = km_df.assign(risk=predictions_train)
+
+                print("    Calculating survival split...")
+                optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
+                                                          method="Brute")
+                risk_splits = np.cumulative_sum(optimal_splits)
+                km_val_df = alpha_val.outcome_target_table
+                km_val_df["risk"] = predictions_val
+                groups = ascii_uppercase[:len(risk_splits) + 1]
+                km_val_df["group"] = groups[0]
+                for group, cutoff in zip(groups[1:], risk_splits):
+                    km_val_df.loc[km_val_df["risk"] > cutoff, "group"] = group
+                logranks = iterate_logrank_tests(km_val_df)
+
                 results.append(CV_Result(
                     fold=i,
                     alpha=alpha,
@@ -304,110 +385,29 @@ def cross_validation_run(dataset: NetworkDataset,
                     genes=genes,
                     n_epochs=epoch,
                     lrs=[float(x[0]) for x in learning_rates],
-                    losses_train=losses,
+                    losses_train=losses_train,
                     losses_val=losses_val,
+                    pll_train=partial_log_likelihood(alpha_data.outcome_target_table,
+                                                     predictions_train),
+                    pll_val=partial_log_likelihood(alpha_val.outcome_target_table,
+                                                   predictions_val),
+                    network=network if save_network else None,
                     name=dataset.name,
+                    hazards_train=predictions_train,
+                    hazards_val=predictions_val,
+                    hazards_baseline=baseline_hazards,
+                    ibs=ibs,
+                    ctd=ctd,
+                    risk_splits=risk_splits,
+                    logranks=logranks,
+                    survival_train=survival_train,
+                    survival_val=survival_val,
                     classes_train=classes_train,
                     classes_val=classes_val,
-                    network=network if save_network else None,
-                    pll_train=None,
-                    pll_val=None,
-                    hazards_baseline=None,
-                    hazards_train=None,
-                    hazards_val=None,
-                    ibs=None,
-                    ctd=None,
-                    risk_splits=None,
-                    logranks=None,
-                    survival_train=None,
-                    survival_val=None,
-                    classify_loss_train = losses[-1],
-                    classify_loss_val = losses_val[-1],
+                    classify_loss_train=classify_loss_train,
+                    classify_loss_val=classify_loss_val,
                     first_weights=first_weights
                     ))
-                continue
-
-            predictions_train = predictions_train.cpu().detach().numpy()
-            predictions_val = predictions_val.cpu().detach().numpy()
-            baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
-                                                        predictions_train)
-            survival_train = predict_survival_table(predictions_train,
-                                                    baseline_hazards.cumulative)
-            survival_val = predict_survival_table(predictions_val,
-                                                  baseline_hazards.cumulative)
-            if hazard_classify:
-                classes_train = classify_by_hazard_at_threshold(survival_train,
-                                                                dataset.class_threshold)
-                classes_val = classify_by_hazard_at_threshold(survival_val,
-                                                              dataset.class_threshold)
-                classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                               alpha_data.classes)
-                classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                             alpha_val.classes)
-            else:
-                classes_train, classes_val = None, None
-                classify_loss_train, classify_loss_val = None, None
-
-            ev = EvalSurv(survival_val,
-                          alpha_val.durations.cpu().detach().numpy(),
-                          alpha_val.events.cpu().detach().numpy(),
-                          censor_surv="km")
-            ctd = ev.concordance_td()
-
-            time_grid = np.linspace(float(alpha_val.durations.min()),
-                                    float(alpha_val.durations.max()),
-                                    100)
-            brier_scores = ev.brier_score(time_grid)
-            ibs = (simpson(y=brier_scores.values, x=brier_scores.index)
-                   / (brier_scores.index[-1] - brier_scores.index[0]))
-
-            # ev.integrated_nbll(time_grid)
-
-            km_df = alpha_data.outcome_target_table
-            km_df = km_df.assign(risk=predictions_train)
-
-            print("    Calculating survival split...")
-            optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
-                                                      method="Brute")
-            risk_splits = np.cumulative_sum(optimal_splits)
-            km_val_df = alpha_val.outcome_target_table
-            km_val_df["risk"] = predictions_val
-            groups = ascii_uppercase[:len(risk_splits) + 1]
-            km_val_df["group"] = groups[0]
-            for group, cutoff in zip(groups[1:], risk_splits):
-                km_val_df.loc[km_val_df["risk"] > cutoff, "group"] = group
-            logranks = iterate_logrank_tests(km_val_df)
-
-            results.append(CV_Result(
-                fold=i,
-                alpha=alpha,
-                alpha_index=j,
-                genes=genes,
-                n_epochs=epoch,
-                lrs=[float(x[0]) for x in learning_rates],
-                losses_train=losses,
-                losses_val=losses_val,
-                pll_train=partial_log_likelihood(alpha_data.outcome_target_table,
-                                                 predictions_train),
-                pll_val=partial_log_likelihood(alpha_val.outcome_target_table,
-                                               predictions_val),
-                network=network if save_network else None,
-                name=dataset.name,
-                hazards_train=predictions_train,
-                hazards_val=predictions_val,
-                hazards_baseline=baseline_hazards,
-                ibs=ibs,
-                ctd=ctd,
-                risk_splits=risk_splits,
-                logranks=logranks,
-                survival_train=survival_train,
-                survival_val=survival_val,
-                classes_train=classes_train,
-                classes_val=classes_val,
-                classify_loss_train=classify_loss_train,
-                classify_loss_val=classify_loss_val,
-                first_weights=first_weights
-                ))
     results = CV_ResultsCollection(results, None, cv_splits)
     return results
 
