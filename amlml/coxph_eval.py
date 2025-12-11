@@ -76,10 +76,10 @@ class CV_Result:
                  hazards_train, hazards_val, hazards_baseline,
                  ctd, ibs, risk_splits,
                  logranks,
-                 survival_train, survival_val,
+                 survival_train, survival_val, first_weights,
                  classes_train=None, classes_val=None,
                  classify_loss_train=None, classify_loss_val=None,
-                 name=None):
+                 parameters=None, name=None):
         self.fold = fold
         self.alpha = alpha
         self.alpha_index = alpha_index
@@ -109,6 +109,9 @@ class CV_Result:
 
         self.classify_loss_train = classify_loss_train
         self.classify_loss_val = classify_loss_val
+
+        self.first_weights = first_weights
+        self.parameters = parameters
 
         self.name = name
 
@@ -153,8 +156,9 @@ class CV_Result:
             ]
         for name, color, loss in data:
                 subplot = go.Scatter(x=list(range(1, len(loss)+1)), y=loss,
-                                     mode="markers+lines", name=name,
-                                     marker_color=color, line_color=color)
+                                     mode="lines", name=name,
+                                     marker_color=color, line_color=color,
+                                     legendgroup=name)
                 subplots.append(subplot)
         if _as_subplot:
             return subplots
@@ -196,6 +200,16 @@ class CV_Result:
                                      mode="markers", name=name), col=i)
         return fig
 
+    def rank_covariates(self, dataset, cols, embedded_dims=None):
+        if embedded_dims is None:
+            embedded_dims = {"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3}
+        covariates = [y for x, dims in embedded_dims.items() for y in [x]*dims]
+        covariates = covariates + [var for var, type_ in cols["Covariates"].items() if type_ != "categorical"]
+        covariates = list(dataset.genes) + covariates
+        regs = np.abs(self.first_weights).sum(axis=0)
+        ranked = pd.DataFrame(zip(covariates, regs), columns=["covariate", "reg_weight"]).sort_values("reg_weight")
+        return ranked
+
 
 class CV_ResultsCollection:
     def __init__(self, results: list[CV_Result], methods=None, folds_per=None):
@@ -230,6 +244,21 @@ class CV_ResultsCollection:
                 for subplot in subplots:
                     figure.add_trace(subplot, row=i + 1, col=j + 1)
         return figure
+
+    def plot_method_loss(self):
+        figs = []
+        for method in self.methods:
+            results = [result for result in self.results if method in result.name]
+            fig = make_subplots(rows=self.folds_per, cols=len(results) // self.folds_per,
+                                x_title="Alpha", y_title="Fold")
+            for result in results:
+                traces = result.plot_loss(_as_subplot=True)
+                for trace in traces:
+                    fig.add_trace(trace, row=result.fold+1, col=result.alpha_index+1)
+            fig.update_layout(title=method)
+            fig.update_yaxes(range=[0, 1])
+            figs.append(fig)
+        return figs
 
     def plot_loss(self):
         figure = self._plot("plot_loss")
