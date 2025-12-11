@@ -37,6 +37,7 @@ args = dict(
     coxnet_alphas=None,
     network_l1_reg=True,
     network_l1_alphas=np.linspace(0.01, 0.1, 10),
+    network_weight_decay=1e-4,
 
 
     # Cross-Validation.
