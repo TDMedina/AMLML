@@ -77,6 +77,8 @@ class ParallelGeneLayers(nn.Module):
         self.weights = nn.Parameter(torch.randn(self.n_genes, self.n_tech))
         self.bias = nn.Parameter(torch.zeros(self.n_genes))
 
+        self.vmapped = torch.vmap(self.combine_gene, in_dims=(0, 0, 0))
+
         if zero_params:
             nn.init.zeros_(self.weights)
             nn.init.zeros_(self.bias)
@@ -98,8 +100,9 @@ class ParallelGeneLayers(nn.Module):
 
     def forward(self, x):
         x = x.permute(2, 1, 0)
-        combine_parallel = vmap(self.combine_gene, in_dims=(0, 0, 0))
-        results = combine_parallel(x, self.weights, self.bias).T
+        # combine_parallel = vmap(self.combine_gene, in_dims=(0, 0, 0))
+        # results = combine_parallel(x, self.weights, self.bias).T
+        results = self.vmapped(x, self.weights, self.bias).T
         results = self.activation(results)
         return results
 

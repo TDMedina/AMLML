@@ -35,7 +35,7 @@ from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, 
 
 
 if torch.cuda.is_available():
-    DEVICE = torch.device("cuda:0")
+    DEVICE = torch.device("cuda")
 else:
     DEVICE = torch.device("cpu")
 
@@ -216,7 +216,8 @@ def cross_validation_run(dataset: NetworkDataset,
                     ))
 
             network = network_type(**network_parameters)
-            network.to(DEVICE)
+            network = network.to(DEVICE)
+            network = torch.compile(network)
 
             # Start by using PyCox's lr_finder.
             if lr_init is not None:
