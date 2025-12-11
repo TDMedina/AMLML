@@ -63,34 +63,78 @@ class LocalLayers(nn.Module):
 class ConnectedLayers(nn.Module):
     def __init__(self, n_genes, shrinkage_factor=10, minimum_penultimate_size=10,
                  final_size=1, zero_params=False, kaiming_weights=False,
-                 output_xavier=False):
+                 output_xavier=False, dropout=0.2):
         super().__init__()
 
-        connected_layers = []
+        layers = []
         n = n_genes
-        while minimum_penultimate_size <= (n_out := n // shrinkage_factor):
-            connected_layers.append(nn.Linear(n, n_out))
+        while (n_out := n // shrinkage_factor) >= minimum_penultimate_size:
+            layers.append(nn.Linear(n, n_out))
             n = n_out
-        connected_layers.append(nn.Linear(n, final_size))
-        self.connected_layers = nn.ModuleList(connected_layers)
+        # If n_genes // 10 is less than the minimum penultimate size, add a hidden layer.
+        if not layers:
+            n_out = min(minimum_penultimate_size, n)  # e.g., 99 -> 10 if n_genes is larger than min_penultimate, or 9->9 otherwise.
+            layers.append(nn.Linear(n, n_out))
+            n = n_out
+        layers.append(nn.Linear(n, final_size))
+        self.layers = nn.ModuleList(layers)
         if zero_params:
-            for layer in self.connected_layers:
+            for layer in self.layers:
                 for param in layer.parameters():
                     nn.init.zeros_(param)
         elif kaiming_weights:
-            for layer in self.connected_layers:
+            for layer in self.layers:
                 nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
         if output_xavier:
-            nn.init.xavier_uniform_(self.connected_layers[-1].weight)
+            nn.init.xavier_uniform_(self.layers[-1].weight)
         self.activator = nn.ReLU()
+        self.dropout = nn.Dropout(dropout) if dropout is not None else lambda x: x
         # self.final_activator = nn.ReLU()
 
     def forward(self, x):
-        for layer in self.connected_layers[:-1]:
+        for layer in self.layers[:-1]:
             x = layer(x)
             x = self.activator(x)
-        x = self.connected_layers[-1](x)
+            x = self.dropout(x)
+        x = self.layers[-1](x)
         # x = self.final_activator(self.connected_layers[-1](x))
+        return x
+
+
+class ShallowConnectedLayers(nn.Module):
+    def __init__(self, input_size, dropout=0.2, kaiming_weights=True, output_xavier=False):
+        super().__init__()
+
+        hidden1 = self.compute_hidden_size(input_size)
+        layers = [nn.Linear(input_size, hidden1), nn.ReLU(), nn.Dropout(dropout)]
+
+        if input_size > 300:
+            hidden2 = max(hidden1 // 2, 32)
+            layers += [nn.Linear(hidden1, hidden2), nn.ReLU(), nn.Dropout(dropout)]
+            final_in = hidden2
+        else:
+            final_in = hidden1
+
+        layers.append(nn.Linear(final_in, 1))
+        self.layers = nn.Sequential(*layers)
+
+        if kaiming_weights:
+            for layer in self.layers:
+                if isinstance(layer, nn.Linear):
+                    nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+                    nn.init.zeros_(layer.bias)
+        if output_xavier:
+            nn.init.xavier_uniform_(self.layers[-1].weight)
+            nn.init.zeros_(self.layers[-1].bias)
+
+    @staticmethod
+    def compute_hidden_size(n_genes):
+        size = 4 * n_genes**0.5
+        size = int(max(32, min(size, 1024)))
+        return size
+
+    def forward(self, x):
+        x = self.layers(x)
         return x
 
 
