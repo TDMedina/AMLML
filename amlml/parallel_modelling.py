@@ -103,6 +103,10 @@ class ParallelGeneLayers(nn.Module):
         results = self.activation(results)
         return results
 
+    def einsum_forward(self, x):
+        x = torch.einsum('btg,gt->bg', x, self.weights) + self.bias
+        return x
+
 
 # class CombinedParallelModel(nn.Module):
 #     def __init__(self, n_genes: int, n_tech: int, n_expansion=4,
