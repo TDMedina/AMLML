@@ -196,6 +196,8 @@ class ClinicalMissingMask(nn.Module):
         self.bias = nn.Parameter(torch.zeros(self.n_variables))
         self.activation = nn.ReLU()
 
+        self.vmapped = vmap(self.mask_covariate, in_dims=(0, 0, 0))
+
     def __repr__(self):
         string = super().__repr__()
         string = string.split("\n")
@@ -210,8 +212,7 @@ class ClinicalMissingMask(nn.Module):
 
     def forward(self, x):
         x = x.permute(2, 1, 0)
-        mask_parallel = vmap(self.mask_covariate, in_dims=(0, 0, 0))
-        results = mask_parallel(x, self.weights, self.bias).T
+        results = self.vmapped(x, self.weights, self.bias).T
         results = self.activation(results)
         return results
 
@@ -243,12 +244,14 @@ class SuperModel(nn.Module):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
-        self.clinical_model = None
 
         if self.includes_clinical:
             dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
                                                 n_clinical-3)
+        else:
+            self.clinical_model = self.clinical_dummy
+
         if bellows_normalization:
             self.expression_model = CombinedGeneModel(n_genes, n_tech, n_expansion,
                                                       zero_params=zero_params,
@@ -268,12 +271,15 @@ class SuperModel(nn.Module):
                                                     output_xavier=output_xavier, dropout=dropout)
         # self.output_activator = nn.Sigmoid()
 
+    @staticmethod
+    def clinical_dummy(*args, **kwargs):
+        return torch.tensor([])
+
     # def forward(self, input_tuple):
     def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
         x = self.expression_model(expression)
-        if self.includes_clinical:
-            clinical = self.clinical_model(clinical_categorical, clinical_non_categorical)
-            x = torch.cat([x, clinical], dim=1)
+        clinical = self.clinical_model(clinical_categorical, clinical_non_categorical)
+        x = torch.cat([x, clinical], dim=1)
         x = self.connected_layers(x)
         # x = self.output_activator(x)
         return x
