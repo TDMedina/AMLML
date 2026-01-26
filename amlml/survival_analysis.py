@@ -22,11 +22,11 @@ from pycox.evaluation import EvalSurv
 from amlml.parallel_modelling import SuperModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import plot_survival_curves, optimize_survival_splits, iterate_logrank_tests
-from amlml.data_loader import main_loader, prepare_supermodel_data
+from amlml.data_loader import main_loader, prepare_supermodel_expression
 
 
 (expression, outcomes, categoricals, non_categoricals, set_ids, group_labels,
- expression_table) = main_loader(prepare_supermodel_data)
+ expression_table) = main_loader(prepare_supermodel_expression)
 
 
 # %% Cross validation.
@@ -149,7 +149,10 @@ def cross_validation_run(expression_data, categorical_data, non_categorical_data
 
             print("Evaluating performance...")
             results[i][alpha]["pll"] = model.partial_log_likelihood(val_args,
-                                                              outcomes_val).mean()
+                                                                    outcomes_val).mean()
+            # TODO:
+            results[i][alpha]["pll_train"] = model.partial_log_likelihood(train_args,
+                                                                          outcomes_train).mean()
             model.compute_baseline_hazards()
 
             surv = model.predict_surv_df(val_args)
@@ -189,7 +192,7 @@ def make_results_table(results):
             entry = ([fold, alpha, len(result_dict["genes"].split(","))]
                      + [result_dict[x] for x in fields])
             entry += [tuple(sorted(result_dict["risk_splits"]))]
-            print(fold, alpha, result_dict["km_logrank"].keys())
+            # print(fold, alpha, result_dict["km_logrank"].keys())
             entry += [result_dict["km_logrank"][tuple(x)].p_value
                       if tuple(x) in result_dict["km_logrank"] else None
                       for x in ["AB", "BC", "AC"]]
@@ -220,7 +223,8 @@ cv_results = cross_validation_run(
     outcome_data=outcomes["train"],
     group_data=group_labels["train"],
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
-    original_data=expression_table["train"]
+    original_data=expression_table["train"],
+    # iterate_alphas=False
     )
 
 

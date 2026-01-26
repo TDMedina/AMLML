@@ -15,6 +15,7 @@ from amlml.data_loader import (
     prepare_zupermodel_expression
     )
 
+
 args = dict(
     datasets=normalization_generator(
         methods=[
@@ -49,16 +50,16 @@ args = dict(
     # batch_size=350,
     batch_size=2000,
     # epochs=360,
-    epochs=20,
+    epochs=2500,
     dropout=0.2,
 
     # Learning rate.
-    lr_init=None,
-    # lr_init=0.001,
+    # lr_init=None,
+    lr_init=0.001,
     constant_lr=False,
     epochs_per_cycle=100,
     end_with_lr_cycle=False,
-    lr_cycle_mode="triangular2",
+    lr_cycle_mode="triangular",
 
     # Model architecture.
     bellows_normalization=False,
