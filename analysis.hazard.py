@@ -107,17 +107,17 @@ cv_results.parameters = str(args)
 table = cv_results.tabulate()
 aggregate = cv_results.make_agg_table()
 
-# depth = "shallow" if args["use_shallow"] else "deep"
-# rmst = "with" if args["use_rmst"] else "without"
-# clinical = "with" if args["include_clinical_variables"] else "without"
-# l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
-#
-# outname = f"results_hazard.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
-#
-# os.mkdir(f"./Data/{outname}/")
-# with open(f"./Data/{outname}/{outname}.pickle", "wb") as outfile:
-#     pickle.dump(cv_results, outfile)
-# with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
-#     outfile.write(str(args) + "\n")
-# table.to_csv(f"./Data/{outname}/{outname}.tsv")
-# aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv")
+depth = "shallow" if args["use_shallow"] else "deep"
+rmst = "with" if args["use_rmst"] else "without"
+clinical = "with" if args["include_clinical_variables"] else "without"
+l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
+
+outname = f"results_hazard.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
+
+os.mkdir(f"./Data/{outname}/")
+with open(f"./Data/{outname}/{outname}.pickle", "wb") as outfile:
+    pickle.dump(cv_results, outfile)
+with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
+    outfile.write(str(args) + "\n")
+table.to_csv(f"./Data/{outname}/{outname}.tsv")
+aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv")
