@@ -19,11 +19,11 @@ from amlml.data_loader import (
 args = dict(
     datasets=normalization_generator(
         methods=[
-            # prepare_log2_expression,
-            # prepare_zscore_expression,
-            # prepare_npn_expression,
+            prepare_log2_expression,
+            prepare_zscore_expression,
+            prepare_npn_expression,
             prepare_supermodel_expression,
-            # prepare_zupermodel_expression
+            prepare_zupermodel_expression
             ],
         verbose=True),
     remove_age_over=None,
@@ -41,8 +41,7 @@ args = dict(
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    # TODO: Testing.
-    cv_splits=1,  # Default = 5
+    cv_splits=5,  # Default = 5
 
     # Training.
     cov_threshold=0.00105,  # Default = 0.01
@@ -72,7 +71,7 @@ args = dict(
     classify=False,
     hazard_classify=True,
     classification_threshold=365*4,
-    use_rmst=False, rmst_max_time=None, rmst_tukey_factor=None,
+    use_rmst=True, rmst_max_time=None, rmst_tukey_factor=None,
 
     # Outputs.
     save_network=False,
