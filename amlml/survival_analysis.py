@@ -57,6 +57,9 @@ def cross_validation_run(expression_data, categorical_data, non_categorical_data
     results = dict()
 
     for i, (train_fold, val_fold) in enumerate(kf.split(expression_data, group_data)):
+        # TESTING
+        # if i != 4:
+        #     continue
         print(f"Running fold {i}...")
         results[i] = dict()
         print(f"    Preparing input data...")
@@ -88,6 +91,9 @@ def cross_validation_run(expression_data, categorical_data, non_categorical_data
             geneset = {0: (slice(None), list(alpha_data.columns))}
         print("Running validation...")
         for alpha, (index, genes) in tqdm(geneset.items()):
+            # TESTING
+            # if not np.isclose(alpha, 0.00121, atol=1e-4):
+            #     continue
             results[i][alpha] = dict()
             results[i][alpha]["genes"] = ",".join(genes)
 
@@ -526,3 +532,5 @@ for alpha, genes in tqdm(non_zero_genes.items()):
     results = test_network(expression, alpha)
     all_results[alpha] = results
     plt.close("all")
+
+# %%
