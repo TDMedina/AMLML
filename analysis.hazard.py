@@ -32,11 +32,12 @@ args = dict(
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
-    use_coxnet_alphas=False,
+    use_coxnet_alphas=True,
     coxnet_n_alphas=10,  # Default = 21
     coxnet_alpha_min_ratio=1/64, # Default = 0.01, classify = 0.05
     coxnet_alphas=None,
-    network_l1_reg=True,
+
+    network_l1_reg=False,
     network_l1_alphas=np.linspace(0.01, 0.1, 2),
     network_weight_decay=1e-4,
 
@@ -101,22 +102,30 @@ args = dict(
 #     args["datasets"] = normalization_generator(methods)
 #     args.update(argset)
 
-cv_results = cv_multiple(**args)
-cv_results.parameters = str(args)
-table = cv_results.tabulate()
-aggregate = cv_results.make_agg_table()
+iter_args = product([True, False], repeat=3)
+for run_arg in iter_args:
+    args["include_clinical_variables"] = run_arg[0]
+    # args["use_coxnet_alphas"] = run_arg[1]
+    # args["network_l1_args"] = not run_arg[1]
+    args["shallow"] = run_arg[1]
+    args["use_rmst"] = run_arg[2]
 
-depth = "shallow" if args["use_shallow"] else "deep"
-rmst = "with" if args["use_rmst"] else "without"
-clinical = "with" if args["include_clinical_variables"] else "without"
-l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
+    cv_results = cv_multiple(**args)
+    cv_results.parameters = str(args)
+    table = cv_results.tabulate()
+    aggregate = cv_results.make_agg_table()
 
-outname = f"results_hazard.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
+    clinical = "with" if args["include_clinical_variables"] else "without"
+    l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
+    depth = "shallow" if args["use_shallow"] else "deep"
+    rmst = "with" if args["use_rmst"] else "without"
 
-os.mkdir(f"./Data/{outname}/")
-with open(f"./Data/{outname}/{outname}.pickle", "wb") as outfile:
-    pickle.dump(cv_results, outfile)
-with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
-    outfile.write(str(args) + "\n")
-table.to_csv(f"./Data/{outname}/{outname}.tsv")
-aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv")
+    outname = f"results_hazard.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
+
+    os.mkdir(f"./Data/{outname}/")
+    with open(f"./Data/{outname}/{outname}.pickle", "wb") as outfile:
+        pickle.dump(cv_results, outfile)
+    with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
+        outfile.write(str(args) + "\n")
+    table.to_csv(f"./Data/{outname}/{outname}.tsv")
+    aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv")
