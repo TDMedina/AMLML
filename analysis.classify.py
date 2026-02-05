@@ -107,7 +107,7 @@ for run_arg in iter_args:
     args["include_clinical_variables"] = run_arg[0]
     # args["use_coxnet_alphas"] = run_arg[1]
     # args["network_l1_args"] = not run_arg[1]
-    args["shallow"] = run_arg[1]
+    args["use_shallow"] = run_arg[1]
     args["use_rmst"] = run_arg[2]
 
     cv_results = cv_multiple(**args)
