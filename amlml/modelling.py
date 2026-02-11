@@ -102,13 +102,15 @@ class ConnectedLayers(nn.Module):
 
 
 class ShallowConnectedLayers(nn.Module):
-    def __init__(self, input_size, dropout=0.2, kaiming_weights=True, output_xavier=False):
+    def __init__(self, input_size, dropout=0.2,
+                 kaiming_weights=True, output_xavier=False,
+                 cutoff=300):
         super().__init__()
 
         hidden1 = self.compute_hidden_size(input_size)
         layers = [nn.Linear(input_size, hidden1), nn.ReLU(), nn.Dropout(dropout)]
 
-        if input_size > 300:
+        if input_size > cutoff:
             hidden2 = max(hidden1 // 2, 32)
             layers += [nn.Linear(hidden1, hidden2), nn.ReLU(), nn.Dropout(dropout)]
             final_in = hidden2

@@ -127,5 +127,5 @@ for run_arg in iter_args:
         pickle.dump(cv_results, outfile)
     with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
         outfile.write(str(args) + "\n")
-    table.to_csv(f"./Data/{outname}/{outname}.tsv")
-    aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv")
+    table.to_csv(f"./Data/{outname}/{outname}.tsv", sep="\t")
+    aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv", sep="\t")
