@@ -38,7 +38,7 @@ args = dict(
     coxnet_alphas=None,
 
     network_l1_reg=False,
-    network_l1_alphas=np.linspace(0.01, 0.1, 2),
+    network_l1_alphas=[0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
     network_weight_decay=1e-4,
 
     # Cross-Validation.
@@ -76,6 +76,7 @@ args = dict(
 
     # Outputs.
     save_network=False,
+    skip_diverged=True,
 )
 
 # methods=[

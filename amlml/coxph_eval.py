@@ -189,15 +189,15 @@ class CV_Result:
 
     def plot_predictions(self):
         fig = make_subplots(1, 2)
-        for i, (name, data) in enumerate(zip(["Train", "Val"],
+        for i, (name, data) in enumerate(zip(["Training", "Validation"],
                                          [self.classes_train, self.classes_val]),
                                          start=1):
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, "Training"],
+            fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, name],
                                      y=data.loc[data.Predicted < 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i)
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, "Training"],
+                                     mode="markers", name=name), col=i, row=1)
+            fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, name],
                                      y=data.loc[data.Predicted >= 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i)
+                                     mode="markers", name=name), col=i, row=1)
         return fig
 
     def rank_covariates(self, dataset, cols, embedded_dims=None):
@@ -245,7 +245,9 @@ class CV_ResultsCollection:
                     figure.add_trace(subplot, row=i + 1, col=j + 1)
         return figure
 
-    def plot_method_loss(self):
+    def plot_method_loss(self, y_range=None):
+        if y_range is None:
+            y_range = [0, 1]
         figs = []
         for method in self.methods:
             results = [result for result in self.results if method in result.name]
@@ -256,7 +258,7 @@ class CV_ResultsCollection:
                 for trace in traces:
                     fig.add_trace(trace, row=result.fold+1, col=result.alpha_index+1)
             fig.update_layout(title=method)
-            fig.update_yaxes(range=[0, 1])
+            fig.update_yaxes(range=y_range)
             figs.append(fig)
         return figs
 

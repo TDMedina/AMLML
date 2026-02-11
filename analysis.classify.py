@@ -75,6 +75,7 @@ args = dict(
 
     # Outputs.
     save_network=False,
+    skip_diverged=True,
 )
 
 # methods=[

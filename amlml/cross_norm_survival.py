@@ -128,11 +128,11 @@ def cross_validation_run(dataset: NetworkDataset,
                          zero_params=False, kaiming_weights=False,
                          bellows_normalization=True,
                          remove_age_over=None, restrict_tech=None, use_shallow=False,
-                         dropout=0.2
+                         dropout=0.2, skip_diverged=True
                          ):
     coxnet_n_alphas = coxnet_n_alphas + 1 if coxnet_n_alphas is not None else None
     network_l1_alphas = [0] if network_l1_alphas is None else network_l1_alphas
-    len_loss_convergence = epochs_per_cycle
+    len_loss_convergence = epochs_per_cycle // 2
     convergence_test = generate_loss_convergence_test(
         metric="cov",
         test_loss_slope=True,
@@ -295,6 +295,7 @@ def cross_validation_run(dataset: NetworkDataset,
                                               "Slope": "--"})
 
             # Evaluate.
+            network.eval()
             with torch.no_grad():
                 losses_train = [x.item() for x in losses_train]
                 losses_val = [x.item() for x in losses_val]
@@ -330,17 +331,30 @@ def cross_validation_run(dataset: NetworkDataset,
 
                 predictions_train = predictions_train.cpu().numpy()
                 predictions_val = predictions_val.cpu().numpy()
-                baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
-                                                            predictions_train)
-                survival_train = predict_survival_table(predictions_train,
-                                                        baseline_hazards.cumulative)
-                survival_val = predict_survival_table(predictions_val,
-                                                      baseline_hazards.cumulative)
-                if hazard_classify:
+
+                skipping = skip_diverged and losses_train[-1] > 50
+                if skipping:
+                    baseline_hazards = "Diverged"
+                    survival_train = "Diverged"
+                    survival_val = "Diverged"
+                else:
+                    baseline_hazards = compute_baseline_hazards(alpha_data.outcome_target_table,
+                                                                predictions_train)
+                    survival_train = predict_survival_table(predictions_train,
+                                                            baseline_hazards.cumulative)
+                    survival_val = predict_survival_table(predictions_val,
+                                                          baseline_hazards.cumulative)
+                if hazard_classify and not skipping:
                     classes_train = classify_by_hazard_at_threshold(survival_train,
                                                                     dataset.class_threshold)
                     classes_val = classify_by_hazard_at_threshold(survival_val,
                                                                   dataset.class_threshold)
+                    classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
+                                                     classes_train),
+                                                 columns=["Training", "Predicted"])
+                    classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
+                                                   classes_val),
+                                               columns=["Validation", "Predicted"])
                     classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
                                                    alpha_data.classes)
                     classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
