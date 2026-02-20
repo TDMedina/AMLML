@@ -2,6 +2,7 @@
 from collections.abc import Callable
 from collections import namedtuple
 from functools import wraps
+import math
 from random import shuffle
 import pickle
 from typing import Literal
@@ -11,6 +12,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import plotly.express as px
+from qnorm import quantile_normalize
 from scipy.optimize import brute
 from sklearn.model_selection import train_test_split
 from sklearn.utils import gen_batches
@@ -189,6 +191,15 @@ class NetworkDataset(Dataset):
             self.rmst = table
         return table
 
+
+    # TODO: Finish this to figure out a good RMST value.
+    def plot_rmst_exploration(self, cols=4):
+        max_year = (1 + self.durations.max() // 365).item()
+        rows = math.ceil(max_year / cols)
+        fig = make_subplots(rows=, cols=max_year//rows)
+        for t in range(1, (1 + self.durations.max() // 365).item()):
+
+
     @staticmethod
     def rmst_method(fn):
         @wraps(fn)
@@ -262,6 +273,13 @@ class NetworkDataset(Dataset):
             self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32, device=DEVICE).view([-1, 1])
             self.class_threshold = optimum.durations
         return self.rmst
+
+    @rmst_method
+    def classify_by_rmst_threshold(self, threshold, save=False):
+        self.rmst["groups"] = self.rmst.durations >= threshold
+        if save:
+            self.classes = tensor(self.rmst["groups"].to_numpy(), dtype=torch.float32, device=DEVICE).view([-1, 1])
+            self.class_threshold = threshold
 
     def classify_by_duration(self, threshold=1460, save=False):
         table = self.outcome_target_table
@@ -442,6 +460,20 @@ def prepare_log2_expression(data, concatenate=True, as_tensor=True):
     return all_expression
 
 
+def prepare_qn_expression(data, as_tensor=True, with_zscore=False):
+    expression = prepare_log2_expression(data, concatenate=True, as_tensor=False)
+    expression = quantile_normalize(data["Expression"].astype("float64").T).T
+    if with_zscore:
+        expression = zscore_normalize(expression)
+    if as_tensor:
+        expression = tensor(expression.to_numpy(), dtype=float32)
+    return expression
+
+
+def prepare_qnz_expression(data, as_tensor=True):
+    return prepare_qn_expression(data, as_tensor=as_tensor, with_zscore=True)
+
+
 def prepare_zscore_expression(data, as_tensor=True):
     rna, array = prepare_log2_expression(data, concatenate=False, as_tensor=False)
     rna = zscore_normalize(rna)
@@ -499,9 +531,9 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
                  drop_zero_survivors=True):
     if drop_zero_survivors:
         data = data.loc[data.Outcomes["Overall Survival Time in Days"] > 0]
-    train, test= train_test_split(data, test_size=0.2,
-                                  stratify=data.Tech,
-                                  random_state=0)
+    train, test = train_test_split(data, test_size=0.2,
+                                   stratify=data.Tech,
+                                   random_state=0)
     train = train.sort_values("Tech", ascending=False)
     test = test.sort_values("Tech", ascending=False)
     norm_name = normalization.__name__.split("_")[1]
@@ -515,7 +547,7 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
 
         # Expression.
         if normalization is None:
-            expression = tensor(data.Expression, dtype=float32)
+            expression = tensor(data_split.Expression, dtype=float32)
         else:
             expression = normalization(data_split)
         expression = expression.to(DEVICE)

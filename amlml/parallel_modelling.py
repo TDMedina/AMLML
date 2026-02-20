@@ -3,6 +3,12 @@ from torch import nn, vmap
 from amlml.modelling import ConnectedLayers, ShallowConnectedLayers
 
 
+if torch.cuda.is_available():
+    DEVICE = torch.device("cuda:0")
+else:
+    DEVICE = torch.device("cpu")
+
+
 class ParallelBellowsLayers(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, n_expansion: int, zero_params=False,
                  kaiming_weights=False):
@@ -273,7 +279,7 @@ class SuperModel(nn.Module):
 
     @staticmethod
     def clinical_dummy(*args, **kwargs):
-        return torch.tensor([])
+        return torch.tensor([], device=DEVICE)
 
     # def forward(self, input_tuple):
     def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):

@@ -79,7 +79,7 @@ class CV_Result:
                  survival_train=None, survival_val=None, first_weights=None,
                  classes_train=None, classes_val=None,
                  classify_loss_train=None, classify_loss_val=None,
-                 parameters=None, name=None):
+                 parameters=None, name=None, km_table_train=None, km_table_val=None):
         self.fold = fold
         self.alpha = alpha
         self.alpha_index = alpha_index
@@ -103,6 +103,8 @@ class CV_Result:
 
         self.survival_train = survival_train
         self.survival_val = survival_val
+        self.km_table_train = km_table_train
+        self.km_table_val = km_table_val
 
         self.classes_train = classes_train
         self.classes_val = classes_val
@@ -286,7 +288,7 @@ class TestResult:
                  survival_train=None, survival_test=None, first_weights=None,
                  classes_train=None, classes_test=None,
                  classify_loss_train=None, classify_loss_test=None,
-                 parameters=None, name=None):
+                 parameters=None, name=None, km_table_train=None, km_table_test=None):
         self.alpha = alpha
         self.genes = genes
         self.n_epochs = n_epochs
@@ -308,6 +310,8 @@ class TestResult:
 
         self.survival_train = survival_train
         self.survival_test = survival_test
+        self.km_table_train = km_table_train
+        self.km_table_test = km_table_test
 
         self.classes_train = classes_train
         self.classes_test = classes_test

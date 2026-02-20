@@ -10,6 +10,7 @@ import pandas as pd
 from pandas import IndexSlice as idx
 import plotly.graph_objects as go
 import plotly.express as px
+from qnorm import quantile_normalize
 from scipy.stats import variation
 from scipy.integrate import simpson
 from sklearn.model_selection import StratifiedKFold
@@ -29,7 +30,7 @@ from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import optimize_survival_splits, iterate_logrank_tests
 from amlml.data_loader import NetworkDataset
-from amlml.cross_normalization import zscore_normalize_genes_by_group
+from amlml.cross_normalization import zscore_normalize_genes_by_group, zscore_normalize
 from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
                               TestResult, TestResultsCollection, classify_by_hazard_at_threshold)
 
@@ -111,7 +112,7 @@ def lr_cyclic_step_calculator(sample_size, batch_size, epochs_per_cycle):
 def test_run(train: NetworkDataset, test: NetworkDataset,
              network_type: Callable = CrossNormalizedModel,
              include_clinical_variables=True, covariate_cardinality=None,
-             use_coxnet_alpha=True, coxnet_alpha=None, coxnet_l1_ratio=1,
+             use_coxnet_alpha=True, coxnet_alpha=None, coxnet_l1_ratio=1, qnorm_coxnet=False,
              network_l1_reg=False, network_l1_alpha=None, network_weight_decay=1e-4,
              survival_splits=2, cov_threshold=0.01,
              rel_slope_threshold=0.01,
@@ -126,7 +127,8 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
              zero_params=False, kaiming_weights=False,
              bellows_normalization=True, n_tech=2, n_expansion=4,
              remove_age_over=None, restrict_tech=None, use_shallow=False,
-             dropout=0.2
+             dropout=0.2,
+             test_by_tech=None
              ):
     network_l1_alpha = 0 if network_l1_alpha is None else network_l1_alpha
     len_loss_convergence = epochs_per_cycle
@@ -143,7 +145,6 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
         test = test.filter_by_age_at_diagnosis(remove_age_over)
     if restrict_tech is not None:
         train = train.filter_by_tech(restrict_tech)
-        test = test.filter_by_tech(restrict_tech)
     if classify or hazard_classify:
         if use_rmst:
             train.estimate_durations_with_rmst(max_time=rmst_max_time,
@@ -162,12 +163,19 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
         if hazard_classify:
             bce_loss = BCELoss()
 
+    if test_by_tech is not None:
+        test = test.filter_by_tech(test_by_tech)
+
     print(f"Running dataset: {train.name}")
 
     if use_coxnet_alpha:
         print(f"    Calculating lasso gene set...")
         lasso_data = train.make_expression_table()
-        lasso_data = zscore_normalize_genes_by_group(lasso_data)
+        if qnorm_coxnet:
+            lasso_data = quantile_normalize(lasso_data.drop("Tech", axis=1).astype("float64").T).T
+            lasso_data = zscore_normalize(lasso_data)
+        else:
+            lasso_data = zscore_normalize_genes_by_group(lasso_data)
         alpha_table = test_lasso_penalties(lasso_data,
                                            train.outcomes,
                                            l1_ratio=coxnet_l1_ratio,
@@ -353,11 +361,14 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
         optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
                                                   method="Brute")
         risk_splits = np.cumulative_sum(optimal_splits)
+        risk_splits = [km_df["risk"].quantile(x) for x in risk_splits]
         km_test_df = test.outcome_target_table
         km_test_df["risk"] = predictions_test
         groups = ascii_uppercase[:len(risk_splits) + 1]
         km_test_df["group"] = groups[0]
         for group, cutoff in zip(groups[1:], risk_splits):
+            print(cutoff)
+            print(km_test_df)
             km_test_df.loc[km_test_df["risk"] > cutoff, "group"] = group
         logranks = iterate_logrank_tests(km_test_df)
 
@@ -387,7 +398,9 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
             classes_test=classes_test,
             classify_loss_train=classify_loss_train,
             classify_loss_test=classify_loss_test,
-            first_weights=first_weights
+            first_weights=first_weights,
+            km_table_train=km_df,
+            km_table_test=km_test_df
             )
         return results
 

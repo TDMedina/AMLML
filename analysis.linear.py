@@ -1,13 +1,19 @@
 
 import numpy as np
 import pandas as pd
+from qnorm import quantile_normalize
 from sksurv.linear_model import CoxnetSurvivalAnalysis, CoxPHSurvivalAnalysis
 from sksurv.metrics import concordance_index_censored as cdex
 
 from amlml.data_loader import prepare_zscore_expression, main_loader
-from amlml.cross_normalization import zscore_normalize_genes_by_group
+from amlml.cross_normalization import zscore_normalize_genes_by_group, zscore_normalize
 
 train, test = main_loader(prepare_zscore_expression)
+
+# TODO: Finish this.
+train_data = quantile_normalize(train.make_expression_table().drop("Tech", axis=1).astype("float64").T).T
+train_data = zscore_normalize(train_data)
+test_data = quantile_normalize(test.make_expression_table().drop("Tech", axis=1).astype("float64").T).T
 
 train_data = zscore_normalize_genes_by_group(train.make_expression_table())
 test_data = zscore_normalize_genes_by_group(test.make_expression_table())

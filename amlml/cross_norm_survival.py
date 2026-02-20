@@ -113,7 +113,7 @@ def cross_validation_run(dataset: NetworkDataset,
                          cv_splits=5,
                          include_clinical_variables=True, covariate_cardinality=None,
                          use_coxnet_alphas=True, coxnet_l1_ratio=1,
-                         coxnet_alpha_min_ratio=0.01, coxnet_n_alphas=20, coxnet_alphas=None,
+                         coxnet_alpha_min_ratio=0.01, coxnet_n_alphas=20, coxnet_alphas=None, qnorm_coxnet=False,
                          network_l1_reg=False, network_l1_alphas=None, network_weight_decay=1e-4,
                          survival_splits=2, cov_threshold=0.01,
                          rel_slope_threshold=0.01,
@@ -122,13 +122,14 @@ def cross_validation_run(dataset: NetworkDataset,
                          lr_init=None, constant_lr=False, end_with_lr_cycle=False,
                          lr_cycle_mode="triangular",
                          classify=False, hazard_classify=False,
-                         use_rmst=True, classification_threshold=1460,
+                         use_rmst=True, classification_threshold=None,
                          minimum_penultimate_size=10, shrinkage_factor=10,
                          rmst_max_time=None, rmst_tukey_factor=None,
                          zero_params=False, kaiming_weights=False,
                          bellows_normalization=True,
                          remove_age_over=None, restrict_tech=None, use_shallow=False,
-                         dropout=0.2, skip_diverged=True
+                         dropout=0.2, skip_diverged=True,
+                         _nullify_expression=False
                          ):
     coxnet_n_alphas = coxnet_n_alphas + 1 if coxnet_n_alphas is not None else None
     network_l1_alphas = [0] if network_l1_alphas is None else network_l1_alphas
@@ -149,7 +150,10 @@ def cross_validation_run(dataset: NetworkDataset,
         if use_rmst:
             dataset.estimate_durations_with_rmst(max_time=rmst_max_time,
                                                  tukey_factor=rmst_tukey_factor)
-            dataset.classify_by_rmst_ci_interval(save=True)
+            if classification_threshold is not None:
+                dataset.classify_by_rmst_threshold(threshold=classification_threshold, save=True)
+            else:
+                dataset.classify_by_rmst_ci_interval(save=True)
         else:
             dataset = dataset.filter_low_censorship_and_classify_by_duration(classification_threshold)
         if hazard_classify:
@@ -173,7 +177,11 @@ def cross_validation_run(dataset: NetworkDataset,
         if use_coxnet_alphas:
             print(f"    Calculating lasso penalties...")
             lasso_data = fold_data.make_expression_table()
-            lasso_data = zscore_normalize_genes_by_group(lasso_data)
+            if qnorm_coxnet:
+                lasso_data = quantile_normalize(lasso_data.drop("Tech", axis=1).astype("float64").T).T
+                lasso_data = zscore_normalize(lasso_data)
+            else:
+                lasso_data = zscore_normalize_genes_by_group(lasso_data)
             alpha_table = test_lasso_penalties(lasso_data,
                                                fold_data.outcomes,
                                                l1_ratio=coxnet_l1_ratio,
@@ -257,6 +265,8 @@ def cross_validation_run(dataset: NetworkDataset,
             progress = tqdm(range(1, epochs+1), desc="Epochs",
                             postfix={"Loss": "0", "Var": "--", "Slope": "--"},
                             dynamic_ncols=True, position=0, leave=True)
+            if _nullify_expression:
+                alpha_data.expression = alpha_data.expression * 0
             for epoch in progress:
                 epoch_loss = torch.tensor(0.0, device=DEVICE)
                 for batch in alpha_data.generate_batches(batch_size, shuffle_=True):
@@ -349,16 +359,16 @@ def cross_validation_run(dataset: NetworkDataset,
                                                                     dataset.class_threshold)
                     classes_val = classify_by_hazard_at_threshold(survival_val,
                                                                   dataset.class_threshold)
+                    classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
+                                                   alpha_data.classes)
+                    classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
+                                                 alpha_val.classes)
                     classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
                                                      classes_train),
                                                  columns=["Training", "Predicted"])
                     classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
                                                    classes_val),
                                                columns=["Validation", "Predicted"])
-                    classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                                   alpha_data.classes)
-                    classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                                 alpha_val.classes)
                 else:
                     classes_train, classes_val = None, None
                     classify_loss_train, classify_loss_val = None, None
@@ -385,6 +395,7 @@ def cross_validation_run(dataset: NetworkDataset,
                 optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
                                                           method="Brute")
                 risk_splits = np.cumulative_sum(optimal_splits)
+                risk_splits = [km_df["risk"].quantile(x) for x in risk_splits]
                 km_val_df = alpha_val.outcome_target_table
                 km_val_df["risk"] = predictions_val
                 groups = ascii_uppercase[:len(risk_splits) + 1]
@@ -421,7 +432,9 @@ def cross_validation_run(dataset: NetworkDataset,
                     classes_val=classes_val,
                     classify_loss_train=classify_loss_train,
                     classify_loss_val=classify_loss_val,
-                    first_weights=first_weights
+                    first_weights=first_weights,
+                    km_table_train=km_df,
+                    km_table_val=km_val_df
                     ))
     results = CV_ResultsCollection(results, None, cv_splits)
     return results

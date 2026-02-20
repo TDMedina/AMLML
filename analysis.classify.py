@@ -1,4 +1,5 @@
 
+from datetime import datetime
 from itertools import product
 import os
 import pickle
@@ -10,21 +11,25 @@ from amlml.data_loader import (
     normalization_generator,
     prepare_log2_expression,
     prepare_zscore_expression,
+    prepare_qn_expression,
+    prepare_qnz_expression,
     prepare_npn_expression,
     prepare_supermodel_expression,
     prepare_zupermodel_expression
     )
 
+methods = [
+    # prepare_log2_expression,
+    # prepare_zscore_expression,
+    # prepare_npn_expression,
+    prepare_qn_expression,
+    prepare_qnz_expression,
+    prepare_supermodel_expression,
+    # prepare_zupermodel_expression
+]
+
 args = dict(
-    datasets=normalization_generator(
-        methods=[
-            prepare_log2_expression,
-            prepare_zscore_expression,
-            prepare_npn_expression,
-            prepare_supermodel_expression,
-            prepare_zupermodel_expression
-            ],
-        verbose=True),
+    datasets=normalization_generator(methods=[methods], verbose=True),
     remove_age_over=None,
     restrict_tech=None,
     include_clinical_variables=True,
@@ -32,20 +37,21 @@ args = dict(
 
     # Regularization.
     use_coxnet_alphas=True,
-    coxnet_n_alphas=10,  # Default = 21
-    coxnet_alpha_min_ratio=1/64, # Default = 0.01, classify = 0.05
+    coxnet_n_alphas=10,
+    coxnet_alpha_min_ratio=1/32, # Default = 0.01, classify = 0.05
     coxnet_alphas=None,
+    qnorm_coxnet=True,  # Note: New.
 
     network_l1_reg=False,
-    network_l1_alphas=np.linspace(0.01, 0.1, 2),
+    network_l1_alphas=[0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    cv_splits=5,  # Default = 5
+    cv_splits=3,  # Note: Reset this.
 
     # Training.
-    cov_threshold=0.0005,  # Default = 0.01
-    rel_slope_threshold=0.0005,  # Default = 0.01
+    cov_threshold=0.001,  # Default = 0.01
+    rel_slope_threshold=0.001,  # Default = 0.01
     # batch_size=350,
     batch_size=2000,
     # epochs=360,
@@ -53,8 +59,8 @@ args = dict(
     dropout=0.2,
 
     # Learning rate.
-    lr_init=None,
-    # lr_init=0.001,
+    # lr_init=None,
+    lr_init=0.001,
     constant_lr=False,
     epochs_per_cycle=100,
     end_with_lr_cycle=False,
@@ -70,12 +76,15 @@ args = dict(
     # Classifier model.
     classify=True,
     hazard_classify=False,
-    classification_threshold=365*4,
     use_rmst=True, rmst_max_time=None, rmst_tukey_factor=None,
+    classification_threshold=365 * 3,
 
     # Outputs.
     save_network=False,
     skip_diverged=True,
+
+    # Debugging
+    _nullify_expression=False,
 )
 
 # methods=[
@@ -102,31 +111,32 @@ args = dict(
 #     args["datasets"] = normalization_generator(methods)
 #     args.update(argset)
 
-
-iter_args = product([True, False], repeat=3)
+today = datetime.today().strftime("%Y-%b-%d")
+iter_args = list(product([True, False], repeat=0))
 for run_arg in iter_args:
-    args["include_clinical_variables"] = run_arg[0]
+    args["datasets"] = normalization_generator(methods, verbose=True)
+    # args["include_clinical_variables"] = run_arg[0]
     # args["use_coxnet_alphas"] = run_arg[1]
     # args["network_l1_args"] = not run_arg[1]
-    args["use_shallow"] = run_arg[1]
-    args["use_rmst"] = run_arg[2]
+    # args["use_shallow"] = run_arg[0]
+    # args["use_rmst"] = run_arg[2]
 
     cv_results = cv_multiple(**args)
     cv_results.parameters = str(args)
     table = cv_results.tabulate()
     aggregate = cv_results.make_agg_table()
 
-    clinical = "with" if args["include_clinical_variables"] else "without"
-    l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
-    depth = "shallow" if args["use_shallow"] else "deep"
-    rmst = "with" if args["use_rmst"] else "without"
-
-    outname = f"results_classify.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
-
-    os.mkdir(f"./Data/{outname}/")
-    with open(f"./Data/{outname}/{outname}.pickle", "wb") as outfile:
-        pickle.dump(cv_results, outfile)
-    with open(f"./Data/{outname}/{outname}.args", "w") as outfile:
-        outfile.write(str(args) + "\n")
-    table.to_csv(f"./Data/{outname}/{outname}.tsv", sep="\t")
-    aggregate.to_csv(f"./Data/{outname}/{outname}.agg.tsv", sep="\t")
+    # clinical = "with" if args["include_clinical_variables"] else "without"
+    # l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
+    # depth = "shallow" if args["use_shallow"] else "deep"
+    # rmst = "with" if args["use_rmst"] else "without"
+    #
+    # outname = f"results_classify.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
+    # outpath = f"./Data/{today}/{outname}/"
+    # os.makedirs(outpath)
+    # with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
+    #     pickle.dump(cv_results, outfile)
+    # with open(f"{outpath}/{outname}.args", "w") as outfile:
+    #     outfile.write(str(args) + "\n")
+    # table.to_csv(f"{outpath}/{outname}.tsv", sep="\t")
+    # aggregate.to_csv(f"{outpath}/{outname}.agg.tsv", sep="\t")
