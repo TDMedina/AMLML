@@ -191,14 +191,15 @@ class NetworkDataset(Dataset):
             self.rmst = table
         return table
 
-
-    # TODO: Finish this to figure out a good RMST value.
-    def plot_rmst_exploration(self, cols=4):
-        max_year = (1 + self.durations.max() // 365).item()
-        rows = math.ceil(max_year / cols)
-        fig = make_subplots(rows=, cols=max_year//rows)
-        for t in range(1, (1 + self.durations.max() // 365).item()):
-
+    def plot_rmst_exploration(self):
+        table = self.estimate_durations_with_rmst(keep_original_durations=True, save=False)
+        tables = {i: self.estimate_durations_with_rmst(max_time=365*i, save=False)
+                  for i in range(10, 0, -1)}
+        tables = [x["durations"].rename(f"durations_{i}") for i, x in tables.items()]
+        table = pd.concat([table]+tables, axis=1).melt(id_vars="events")
+        plot = px.histogram(table, x="value", facet_col="variable", color="events",
+                            facet_col_wrap=4)
+        return plot
 
     @staticmethod
     def rmst_method(fn):
@@ -297,6 +298,20 @@ class NetworkDataset(Dataset):
         data.class_threshold = threshold
         return data
 
+    def filter_minimum_duration(self, threshold):
+        index = self.durations >= threshold
+        index = np.where(index)[0]
+        dataset = self[index]
+        dataset.name = self.name + "_duration_filtered"
+        return dataset
+
+    def filter_by_event(self, event):
+        index = self.events == event
+        index = np.where(index)[0]
+        dataset = self[index]
+        dataset.name = self.name + "_event_filtered"
+        return dataset
+
     def filter_by_age_at_diagnosis(self, age_in_days, keep_less_than=True):
         if keep_less_than:
             index = self.non_categoricals[:, 0, 0] < age_in_days
@@ -356,6 +371,9 @@ class NetworkDataset(Dataset):
         figure.add_trace(go.Scatter(x=km.timeline, y=lower_ci, **ci_params,
                                     fill="tonexty", fillcolor="rgba(68, 68, 68, 0.3)"))
         return figure
+
+    def _debug_set(self):
+        return self[:10]
 
 def set_intersect_of_genes(*args):
     genesets = [set(dataset.Expression.columns) for dataset in args]

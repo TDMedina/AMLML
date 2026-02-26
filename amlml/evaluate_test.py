@@ -215,7 +215,7 @@ def test_run(train: NetworkDataset, test: NetworkDataset,
 
     network = network_type(**network_parameters)
     network = network.to(DEVICE)
-    network = torch.compile(network)
+    # network = torch.compile(network)
 
     # Start by using PyCox's lr_finder.
     if lr_init is not None:

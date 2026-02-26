@@ -60,14 +60,14 @@ class ConnectedLayers(nn.Module):
         n = n_genes
         while (n_out := n // shrinkage_factor) >= minimum_penultimate_size:
             layers.append(nn.Linear(n, n_out))
-            layers.append(nn.ReLU())
+            layers.append(nn.LeakyReLU(0.1))
             layers.append(nn.Dropout(dropout))
             n = n_out
         # If n_genes // 10 is less than the minimum penultimate size, add a hidden layer.
         if not layers:
             n_out = min(minimum_penultimate_size, n)  # e.g., 99 -> 10 if n_genes is larger than min_penultimate, or 9->9 otherwise.
             layers.append(nn.Linear(n, n_out))
-            layers.append(nn.ReLU())
+            layers.append(nn.LeakyReLU(0.1))
             layers.append(nn.Dropout(dropout))
             n = n_out
         layers.append(nn.Linear(n, final_size))
@@ -75,17 +75,12 @@ class ConnectedLayers(nn.Module):
         if kaiming_weights:
             for layer in self.layers:
                 if isinstance(layer, nn.Linear):
-                    nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu")
+                    nn.init.kaiming_uniform_(layer.weight, nonlinearity="relu", a=0.1)
         if output_xavier:
             nn.init.xavier_uniform_(self.layers[-1].weight)
 
     def forward(self, x):
         x = self.layers(x)
-        # for layer in self.layers[:-1]:
-        #     x = layer(x)
-        #     x = self.activator(x)
-        #     x = self.dropout(x)
-        # x = self.layers[-1](x)
         return x
 
 

@@ -28,9 +28,9 @@ class ParallelBellowsLayers(nn.Module):
                 nn.init.zeros_(param)
         elif kaiming_weights:
             for param in [self.weights1, self.weights2]:
-                nn.init.kaiming_uniform_(param, nonlinearity="relu")
+                nn.init.kaiming_uniform_(param, nonlinearity="relu", a=0.1)
 
-        self.activation = nn.ReLU()
+        self.activation = nn.LeakyReLU(0.1)
 
     def __repr__(self):
         string = super().__repr__()
@@ -89,8 +89,8 @@ class ParallelGeneLayers(nn.Module):
             nn.init.zeros_(self.weights)
             nn.init.zeros_(self.bias)
         elif kaiming_weights:
-            nn.init.kaiming_uniform_(self.weights, nonlinearity="relu")
-        self.activation = nn.ReLU()
+            nn.init.kaiming_uniform_(self.weights, nonlinearity="relu", a=0.1)
+        self.activation = nn.LeakyReLU(0.1)
 
     def __repr__(self):
         string = super().__repr__()
@@ -200,7 +200,7 @@ class ClinicalMissingMask(nn.Module):
         self.weights = nn.Parameter(torch.randn(self.n_variables, 2))
         nn.init.kaiming_uniform_(self.weights, nonlinearity="relu")
         self.bias = nn.Parameter(torch.zeros(self.n_variables))
-        self.activation = nn.ReLU()
+        self.activation = nn.LeakyReLU(0.1)
 
         self.vmapped = vmap(self.mask_covariate, in_dims=(0, 0, 0))
 

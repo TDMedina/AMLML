@@ -32,13 +32,15 @@ args = dict(
     datasets=normalization_generator(methods=[methods], verbose=True),
     remove_age_over=None,
     restrict_tech=None,
-    include_clinical_variables=False,  # Note: Reset this.
+    minimum_duration=None,
+    filter_events=None,
+    include_clinical_variables=True,  # Note: Reset this.
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
     use_coxnet_alphas=True,
-    coxnet_n_alphas=10,
-    coxnet_alpha_min_ratio=1/64, # Default = 0.01, classify = 0.05
+    coxnet_n_alphas=5,  # Note: Reset this.
+    coxnet_alpha_min_ratio=1/32,  # Note: Reset this to 1/64.
     coxnet_alphas=None,
     qnorm_coxnet=False,  # Note: New.
 
@@ -112,10 +114,10 @@ args = dict(
 #     args.update(argset)
 
 today = datetime.today().strftime("%Y-%b-%d")
-iter_args = product([True, False], repeat=0)
+iter_args = product([True, False], repeat=1)
 for run_arg in iter_args:
     args["datasets"] = normalization_generator(methods, verbose=True)
-    # args["include_clinical_variables"] = run_arg[0]
+    args["include_clinical_variables"] = run_arg[0]
     # args["use_coxnet_alphas"] = run_arg[1]
     # args["network_l1_args"] = not run_arg[1]
     # args["use_shallow"] = run_arg[0]

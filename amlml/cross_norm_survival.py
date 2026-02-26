@@ -6,6 +6,7 @@ from typing import Callable
 
 import numpy as np
 from numpy.polynomial import Polynomial
+from qnorm import quantile_normalize
 import pandas as pd
 from pandas import IndexSlice as idx
 import plotly.graph_objects as go
@@ -29,7 +30,7 @@ from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import optimize_survival_splits, iterate_logrank_tests
 from amlml.data_loader import NetworkDataset
-from amlml.cross_normalization import zscore_normalize_genes_by_group
+from amlml.cross_normalization import zscore_normalize_genes_by_group, zscore_normalize
 from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
                               CV_Result, CV_ResultsCollection, classify_by_hazard_at_threshold)
 
@@ -126,10 +127,12 @@ def cross_validation_run(dataset: NetworkDataset,
                          minimum_penultimate_size=10, shrinkage_factor=10,
                          rmst_max_time=None, rmst_tukey_factor=None,
                          zero_params=False, kaiming_weights=False,
-                         bellows_normalization=True,
-                         remove_age_over=None, restrict_tech=None, use_shallow=False,
+                         bellows_normalization=True, use_shallow=False,
+                         remove_age_over=None, restrict_tech=None, minimum_duration=None,
+                         filter_events=None,
                          dropout=0.2, skip_diverged=True,
-                         _nullify_expression=False
+                         _nullify_expression=False,
+                         _debug_run=False
                          ):
     coxnet_n_alphas = coxnet_n_alphas + 1 if coxnet_n_alphas is not None else None
     network_l1_alphas = [0] if network_l1_alphas is None else network_l1_alphas
@@ -142,6 +145,10 @@ def cross_validation_run(dataset: NetworkDataset,
         n_losses=len_loss_convergence
         )
 
+    if filter_events is not None:
+        dataset = dataset.filter_by_event(filter_events)
+    if minimum_duration is not None:
+        dataset = dataset.filter_minimum_duration(minimum_duration)
     if remove_age_over is not None:
         dataset = dataset.filter_by_age_at_diagnosis(remove_age_over)
     if restrict_tech is not None:
@@ -158,6 +165,9 @@ def cross_validation_run(dataset: NetworkDataset,
             dataset = dataset.filter_low_censorship_and_classify_by_duration(classification_threshold)
         if hazard_classify:
             bce_loss = BCELoss()
+
+    if _debug_run:
+        dataset = dataset._debug_set()
 
     print(f"Running dataset: {dataset.name}")
     if cv_splits == 1:
@@ -225,7 +235,7 @@ def cross_validation_run(dataset: NetworkDataset,
 
             network = network_type(**network_parameters)
             network = network.to(DEVICE)
-            network = torch.compile(network)
+            # network = torch.compile(network)
 
             # Start by using PyCox's lr_finder.
             if lr_init is not None:
@@ -314,12 +324,14 @@ def cross_validation_run(dataset: NetworkDataset,
                 predictions_val = network(*alpha_val.network_args)
 
                 if classify:
-                    classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
+                    classes_train = pd.DataFrame(zip(alpha_data.events.squeeze().tolist(),
+                                                     alpha_data.classes.squeeze().tolist(),
                                                      sigmoid(predictions_train).squeeze().tolist()),
-                                                 columns=["Training", "Predicted"])
-                    classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
+                                                 columns=["Event", "Training", "Predicted"])
+                    classes_val = pd.DataFrame(zip(alpha_val.events.squeeze().tolist(),
+                                                   alpha_val.classes.squeeze().tolist(),
                                                    sigmoid(predictions_val).squeeze().tolist()),
-                                               columns=["Validation", "Predicted"])
+                                               columns=["Event", "Validation", "Predicted"])
                     results.append(CV_Result(
                         fold=i,
                         alpha=alpha,

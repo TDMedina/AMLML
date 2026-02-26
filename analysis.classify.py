@@ -32,13 +32,16 @@ args = dict(
     datasets=normalization_generator(methods=[methods], verbose=True),
     remove_age_over=None,
     restrict_tech=None,
-    include_clinical_variables=True,
+    minimum_duration=30,
+    filter_events=None,
+    include_clinical_variables=False,
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
     use_coxnet_alphas=True,
-    coxnet_n_alphas=10,
-    coxnet_alpha_min_ratio=1/32, # Default = 0.01, classify = 0.05
+    # coxnet_n_alphas=10,
+    coxnet_n_alphas=5,
+    coxnet_alpha_min_ratio=1/16,
     coxnet_alphas=None,
     qnorm_coxnet=True,  # Note: New.
 
@@ -50,8 +53,10 @@ args = dict(
     cv_splits=3,  # Note: Reset this.
 
     # Training.
-    cov_threshold=0.001,  # Default = 0.01
-    rel_slope_threshold=0.001,  # Default = 0.01
+    # cov_threshold=0.001,  # Default = 0.01
+    # rel_slope_threshold=0.001,  # Default = 0.01
+    cov_threshold=1e-2,  # Default = 0.01
+    rel_slope_threshold=1e-3,  # Default = 0.01
     # batch_size=350,
     batch_size=2000,
     # epochs=360,
@@ -68,16 +73,16 @@ args = dict(
 
     # Model architecture.
     bellows_normalization=False,
-    use_shallow=True,
+    use_shallow=False,
     minimum_penultimate_size=4,
-    shrinkage_factor=10,
+    shrinkage_factor=5,
     kaiming_weights=True,
 
     # Classifier model.
     classify=True,
     hazard_classify=False,
-    use_rmst=True, rmst_max_time=None, rmst_tukey_factor=None,
-    classification_threshold=365 * 3,
+    use_rmst=False, rmst_max_time=7*365, rmst_tukey_factor=None,
+    classification_threshold=2038,
 
     # Outputs.
     save_network=False,
@@ -85,6 +90,7 @@ args = dict(
 
     # Debugging
     _nullify_expression=False,
+    _debug_run=False
 )
 
 # methods=[
