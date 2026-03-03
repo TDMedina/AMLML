@@ -129,7 +129,8 @@ def cross_validation_run(dataset: NetworkDataset,
                          zero_params=False, kaiming_weights=False,
                          bellows_normalization=True, use_shallow=False,
                          remove_age_over=None, restrict_tech=None, minimum_duration=None,
-                         filter_events=None,
+                         filter_events=None, filter_ambiguous=None,
+                         filter_minimum_censorship=None,
                          dropout=0.2, skip_diverged=True,
                          _nullify_expression=False,
                          _debug_run=False
@@ -149,6 +150,8 @@ def cross_validation_run(dataset: NetworkDataset,
         dataset = dataset.filter_by_event(filter_events)
     if minimum_duration is not None:
         dataset = dataset.filter_minimum_duration(minimum_duration)
+    if filter_minimum_censorship is not None:
+        dataset = dataset.filter_minimum_censorship(filter_minimum_censorship)
     if remove_age_over is not None:
         dataset = dataset.filter_by_age_at_diagnosis(remove_age_over)
     if restrict_tech is not None:
@@ -165,6 +168,9 @@ def cross_validation_run(dataset: NetworkDataset,
             dataset = dataset.filter_low_censorship_and_classify_by_duration(classification_threshold)
         if hazard_classify:
             bce_loss = BCELoss()
+
+    if filter_ambiguous is not None:
+        dataset = dataset.filter_ambiguous(filter_ambiguous)
 
     if _debug_run:
         dataset = dataset._debug_set()

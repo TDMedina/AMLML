@@ -305,6 +305,13 @@ class NetworkDataset(Dataset):
         dataset.name = self.name + "_duration_filtered"
         return dataset
 
+    def filter_minimum_censorship(self, threshold):
+        index = (self.events == 1) | (self.durations >= threshold)
+        index = np.where(index)[0]
+        dataset = self[index]
+        dataset.name = self.name + "_min_censor_filtered"
+        return dataset
+
     def filter_by_event(self, event):
         index = self.events == event
         index = np.where(index)[0]
@@ -326,6 +333,17 @@ class NetworkDataset(Dataset):
         index = np.where(self.tech == tech)
         dataset = self[index]
         dataset.name = self.name + "_tech_filtered"
+        return dataset
+
+    def filter_ambiguous(self, distance):
+        thresh = self.class_threshold
+        non_ambiguous = ((self.rmst.events == 1)
+                         | (self.rmst.durations < thresh-distance)
+                         | (self.rmst.durations > thresh+distance))
+        index = np.where(non_ambiguous)
+        dataset = self[index]
+        dataset.name = self.name + "_ambiguity_filtered"
+        dataset.rmst = self.rmst.loc[non_ambiguous]
         return dataset
 
     @rmst_method

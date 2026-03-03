@@ -19,12 +19,12 @@ from amlml.data_loader import (
     )
 
 methods = [
-    # prepare_log2_expression,
+    prepare_log2_expression,
     # prepare_zscore_expression,
     # prepare_npn_expression,
-    prepare_qn_expression,
-    prepare_qnz_expression,
-    prepare_supermodel_expression,
+    # prepare_qn_expression,
+    # prepare_qnz_expression,
+    # prepare_supermodel_expression,
     # prepare_zupermodel_expression
 ]
 
@@ -32,8 +32,10 @@ args = dict(
     datasets=normalization_generator(methods=[methods], verbose=True),
     remove_age_over=None,
     restrict_tech=None,
-    minimum_duration=30,
+    minimum_duration=None,
+    filter_minimum_censorship=30,
     filter_events=None,
+    filter_ambiguous=30,
     include_clinical_variables=False,
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
@@ -43,7 +45,7 @@ args = dict(
     coxnet_n_alphas=5,
     coxnet_alpha_min_ratio=1/16,
     coxnet_alphas=None,
-    qnorm_coxnet=True,  # Note: New.
+    qnorm_coxnet=False,  # Note: New.
 
     network_l1_reg=False,
     network_l1_alphas=[0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
@@ -81,8 +83,8 @@ args = dict(
     # Classifier model.
     classify=True,
     hazard_classify=False,
-    use_rmst=False, rmst_max_time=7*365, rmst_tukey_factor=None,
-    classification_threshold=2038,
+    use_rmst=True, rmst_max_time=7*365, rmst_tukey_factor=None,
+    classification_threshold=7*365,
 
     # Outputs.
     save_network=False,
