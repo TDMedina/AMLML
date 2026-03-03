@@ -75,7 +75,7 @@ class CV_Result:
                  pll_train=None, pll_val=None, network=None,
                  hazards_train=None, hazards_val=None, hazards_baseline=None,
                  ctd=None, ibs=None,
-                 risk_splits=None, logranks=None,
+                 risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
                  survival_train=None, survival_val=None, first_weights=None,
                  classes_train=None, classes_val=None,
                  classify_loss_train=None, classify_loss_val=None,
@@ -99,6 +99,8 @@ class CV_Result:
         self.ctd = ctd
         self.ibs = ibs
         self.risk_splits = risk_splits
+        self.risk_split_quantiles = risk_split_quantiles
+        self.risk_split_counts = risk_split_counts
         self.logranks = logranks
 
         self.survival_train = survival_train
@@ -118,9 +120,10 @@ class CV_Result:
         self.name = name
 
     def tabulate(self, include_name=True):
-        risk_splits = (self.risk_splits
-                       if (self.risk_splits is None or len(self.risk_splits) > 1)
-                       else self.risk_splits[0])
+        flatten = lambda thing: (thing if (thing is None or len(thing) > 1) else thing[0])
+        risk_splits = flatten(self.risk_splits)
+        risk_split_quantiles = flatten(self.risk_split_quantiles)
+        risk_counts = self.risk_split_counts.to_dict()
         if self.logranks is None:
             logranks = None
         else:
@@ -141,6 +144,8 @@ class CV_Result:
             ctd=self.ctd,
             ibs=self.ibs,
             risk_splits=risk_splits,
+            risk_split_quantiles=risk_split_quantiles,
+            risk_counts=risk_counts,
             logranks=logranks,
             classify_loss_train = self.classify_loss_train,
             classify_loss_val = self.classify_loss_val,
@@ -284,7 +289,7 @@ class TestResult:
                  pll_train=None, pll_test=None, network=None,
                  hazards_train=None, hazards_test=None, hazards_baseline=None,
                  ctd=None, ibs=None,
-                 risk_splits=None, logranks=None,
+                 risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
                  survival_train=None, survival_test=None, first_weights=None,
                  classes_train=None, classes_test=None,
                  classify_loss_train=None, classify_loss_test=None,
@@ -306,6 +311,8 @@ class TestResult:
         self.ctd = ctd
         self.ibs = ibs
         self.risk_splits = risk_splits
+        self.risk_split_quantiles = risk_split_quantiles
+        self.risk_split_counts = risk_split_counts
         self.logranks = logranks
 
         self.survival_train = survival_train

@@ -11,7 +11,7 @@ else:
 
 class ParallelBellowsLayers(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, n_expansion: int, zero_params=False,
-                 kaiming_weights=False):
+                 kaiming_weights=False, leakyrelu=0):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
@@ -30,7 +30,7 @@ class ParallelBellowsLayers(nn.Module):
             for param in [self.weights1, self.weights2]:
                 nn.init.kaiming_uniform_(param, nonlinearity="relu", a=0.1)
 
-        self.activation = nn.LeakyReLU(0.1)
+        self.activation = nn.LeakyReLU(leakyrelu)
 
     def __repr__(self):
         string = super().__repr__()
@@ -75,7 +75,7 @@ class ParallelBellowsLayers(nn.Module):
 
 class ParallelGeneLayers(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, zero_params=False,
-                 kaiming_weights=False):
+                 kaiming_weights=False, leakyrelu=0):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
@@ -90,7 +90,7 @@ class ParallelGeneLayers(nn.Module):
             nn.init.zeros_(self.bias)
         elif kaiming_weights:
             nn.init.kaiming_uniform_(self.weights, nonlinearity="relu", a=0.1)
-        self.activation = nn.LeakyReLU(0.1)
+        self.activation = nn.LeakyReLU(leakyrelu)
 
     def __repr__(self):
         string = super().__repr__()
@@ -143,7 +143,7 @@ class ParallelGeneLayers(nn.Module):
 
 class CombinedGeneModel(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, n_expansion=4, zero_params=False,
-                 kaiming_weights=False):
+                 kaiming_weights=False, leakyrelu=0):
         super().__init__()
         self.n_genes = n_genes
         self.n_tech = n_tech
@@ -154,9 +154,9 @@ class CombinedGeneModel(nn.Module):
 
         self.local_layers = ParallelBellowsLayers(n_genes, n_tech, n_expansion,
                                                   zero_params=zero_params,
-                                                  kaiming_weights=kaiming_weights)
+                                                  kaiming_weights=kaiming_weights, leakyrelu=leakyrelu)
         self.gene_layers = ParallelGeneLayers(n_genes, n_tech, zero_params=zero_params,
-                                              kaiming_weights=kaiming_weights)
+                                              kaiming_weights=kaiming_weights, leakyrelu=leakyrelu)
         # self.connected_layers = ConnectedLayers(n_genes, shrinkage_factor,
         #                                         minimum_size, final_size)
 
@@ -193,14 +193,14 @@ class ProtocolModel(nn.Embedding):
 
 
 class ClinicalMissingMask(nn.Module):
-    def __init__(self, n_variables: int):
+    def __init__(self, n_variables: int, leakyrelu=0):
         super().__init__()
         self.n_variables = n_variables
 
         self.weights = nn.Parameter(torch.randn(self.n_variables, 2))
         nn.init.kaiming_uniform_(self.weights, nonlinearity="relu")
         self.bias = nn.Parameter(torch.zeros(self.n_variables))
-        self.activation = nn.LeakyReLU(0.1)
+        self.activation = nn.LeakyReLU(leakyrelu)
 
         self.vmapped = vmap(self.mask_covariate, in_dims=(0, 0, 0))
 
@@ -225,12 +225,12 @@ class ClinicalMissingMask(nn.Module):
 
 class ClinicalModel(nn.Module):
     def __init__(self, covariate_cardinality: dict, embedding_dims: dict,
-                 n_non_categorical: int):
+                 n_non_categorical: int, leakyrelu=0):
         super().__init__()
         self.ethnicity = EthnicityModel(covariate_cardinality, embedding_dims)
         self.protocol = ProtocolModel(covariate_cardinality["protocol"],
                                       embedding_dims["protocol"])
-        self.non_categorical = ClinicalMissingMask(n_non_categorical)
+        self.non_categorical = ClinicalMissingMask(n_non_categorical, leakyrelu=leakyrelu)
 
     def forward(self, categorical, non_categorical):
         ethnicity = self.ethnicity(categorical[:, :2])
@@ -246,7 +246,7 @@ class SuperModel(nn.Module):
                  include_clinical_variables=True, n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
                  zero_params=False, kaiming_weights=False, output_xavier=False,
-                 bellows_normalization=True, use_shallow=False, dropout=0.2):
+                 bellows_normalization=True, use_shallow=False, dropout=0.2, leakyrelu=0):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -254,7 +254,7 @@ class SuperModel(nn.Module):
         if self.includes_clinical:
             dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
-                                                n_clinical-3)
+                                                n_clinical-3, leakyrelu=leakyrelu)
         else:
             self.clinical_model = self.clinical_dummy
 
@@ -265,16 +265,19 @@ class SuperModel(nn.Module):
         else:
             self.expression_model = ParallelGeneLayers(n_genes, n_tech,
                                                        zero_params=zero_params,
-                                                       kaiming_weights=kaiming_weights)
+                                                       kaiming_weights=kaiming_weights,
+                                                       leakyrelu=leakyrelu)
         if use_shallow:
             self.connected_layers = ShallowConnectedLayers(dnn_input_dim, kaiming_weights=kaiming_weights,
-                                                           output_xavier=output_xavier, dropout=dropout)
+                                                           output_xavier=output_xavier, dropout=dropout,
+                                                           leakyrelu=leakyrelu)
         else:
             self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
                                                     minimum_penultimate_size, final_size,
                                                     zero_params=zero_params,
                                                     kaiming_weights=kaiming_weights,
-                                                    output_xavier=output_xavier, dropout=dropout)
+                                                    output_xavier=output_xavier, dropout=dropout,
+                                                    leakyrelu=leakyrelu)
         # self.output_activator = nn.Sigmoid()
 
     @staticmethod
@@ -297,7 +300,7 @@ class CrossNormalizedModel(nn.Module):
                  include_clinical_variables=True, n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
                  zero_params=False, kaiming_weights=False, output_xavier=False, use_shallow=False,
-                 dropout=0.2):
+                 dropout=0.2, leakyrelu=0):
         super().__init__()
         self.includes_clinical = include_clinical_variables
         dnn_input_dim = n_genes
@@ -306,16 +309,18 @@ class CrossNormalizedModel(nn.Module):
         if self.includes_clinical:
             dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
-                                                n_clinical-3)
+                                                n_clinical-3, leakyrelu=leakyrelu)
         if use_shallow:
             self.connected_layers = ShallowConnectedLayers(dnn_input_dim, kaiming_weights=kaiming_weights,
-                                                           output_xavier=output_xavier, dropout=dropout)
+                                                           output_xavier=output_xavier, dropout=dropout,
+                                                           leakyrelu=leakyrelu)
         else:
             self.connected_layers = ConnectedLayers(dnn_input_dim, shrinkage_factor,
                                                     minimum_penultimate_size, final_size,
                                                     zero_params=zero_params,
                                                     kaiming_weights=kaiming_weights,
-                                                    output_xavier=output_xavier, dropout=dropout)
+                                                    output_xavier=output_xavier, dropout=dropout,
+                                                    leakyrelu=leakyrelu)
 
     def forward(self, expression, clinical_categorical=None, clinical_non_categorical=None):
         if self.includes_clinical:

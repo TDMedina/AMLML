@@ -131,7 +131,7 @@ def cross_validation_run(dataset: NetworkDataset,
                          remove_age_over=None, restrict_tech=None, minimum_duration=None,
                          filter_events=None, filter_ambiguous=None,
                          filter_minimum_censorship=None,
-                         dropout=0.2, skip_diverged=True,
+                         dropout=0.2, leakyrelu=0, skip_diverged=True,
                          _nullify_expression=False,
                          _debug_run=False
                          ):
@@ -230,7 +230,8 @@ def cross_validation_run(dataset: NetworkDataset,
                 kaiming_weights=kaiming_weights,
                 output_xavier=classify,
                 use_shallow=use_shallow,
-                dropout=dropout
+                dropout=dropout,
+                leakyrelu=leakyrelu
                 )
             if network_type == SuperModel:
                 network_parameters.update(dict(
@@ -412,8 +413,8 @@ def cross_validation_run(dataset: NetworkDataset,
                 print("    Calculating survival split...")
                 optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits,
                                                           method="Brute")
-                risk_splits = np.cumulative_sum(optimal_splits)
-                risk_splits = [km_df["risk"].quantile(x) for x in risk_splits]
+                risk_splits_q = np.cumulative_sum(optimal_splits)
+                risk_splits = [km_df["risk"].quantile(x) for x in risk_splits_q]
                 km_val_df = alpha_val.outcome_target_table
                 km_val_df["risk"] = predictions_val
                 groups = ascii_uppercase[:len(risk_splits) + 1]
@@ -443,6 +444,8 @@ def cross_validation_run(dataset: NetworkDataset,
                     ibs=ibs,
                     ctd=ctd,
                     risk_splits=risk_splits,
+                    risk_split_quantiles=risk_splits_q,
+                    risk_split_counts=km_val_df.group.value_counts(),
                     logranks=logranks,
                     survival_train=survival_train,
                     survival_val=survival_val,

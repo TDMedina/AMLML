@@ -300,21 +300,21 @@ class NetworkDataset(Dataset):
 
     def filter_minimum_duration(self, threshold):
         index = self.durations >= threshold
-        index = np.where(index)[0]
+        index = np.where(index.cpu())[0]
         dataset = self[index]
         dataset.name = self.name + "_duration_filtered"
         return dataset
 
     def filter_minimum_censorship(self, threshold):
         index = (self.events == 1) | (self.durations >= threshold)
-        index = np.where(index)[0]
+        index = np.where(index.cpu())[0]
         dataset = self[index]
         dataset.name = self.name + "_min_censor_filtered"
         return dataset
 
     def filter_by_event(self, event):
         index = self.events == event
-        index = np.where(index)[0]
+        index = np.where(index.cpu())[0]
         dataset = self[index]
         dataset.name = self.name + "_event_filtered"
         return dataset

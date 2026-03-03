@@ -64,6 +64,7 @@ args = dict(
     # epochs=360,
     epochs=2500,
     dropout=0.2,
+    leakyrelu=0.1,
 
     # Learning rate.
     # lr_init=None,
