@@ -96,56 +96,41 @@ args = dict(
     _debug_run=False
 )
 
-# methods=[
-#     # prepare_log2_expression,
-#     prepare_zscore_expression,
-#     # prepare_npn_expression,
-#     # prepare_supermodel_expression,
-#     # prepare_zupermodel_expression
-#     ]
-# argsets = [
-#     # dict(datasets=normalization_generator(methods), use_rmst=True, use_shallow=True),
-#     # dict(datasets=normalization_generator(methods), use_rmst=True, use_shallow=False),
-#     dict(datasets=normalization_generator(methods), use_rmst=False, use_shallow=True, network_l1_alpha=0.04),
-#     # dict(datasets=normalization_generator(methods), use_rmst=False, use_shallow=False),
-# ]
-# argsets = list(product(
-#     [False],  # use_rmst
-#     [True],  # use_shallow
-# ))
-# argsets = [dict(zip(["use_rmst", "use_shallow", "network_l1_alpha"], argset)) for argset in argsets]
-#
-# all_results = []
-# for argset in argsets:
-#     args["datasets"] = normalization_generator(methods)
-#     args.update(argset)
-
 today = datetime.today().strftime("%Y-%b-%d")
-iter_args = list(product([True, False], repeat=0))
-for run_arg in iter_args:
+
+iter_args = dict(
+    include_clinical_variables=[False],
+    use_shallow=[True, False],
+    qnorm_coxnet=[False],
+    # rmst_max_time=[2038, 5*365, 7*365],
+    classification_threshold=[3*365, 2038, 7*365]
+    )
+
+iter_args = [dict(zip(iter_args.keys(), iter_vals)) for iter_vals in product(*iter_args.values())]
+
+for run_args in iter_args:
+    print(run_args)
     args["datasets"] = normalization_generator(methods, verbose=True)
-    # args["include_clinical_variables"] = run_arg[0]
-    # args["use_coxnet_alphas"] = run_arg[1]
-    # args["network_l1_args"] = not run_arg[1]
-    # args["use_shallow"] = run_arg[0]
-    # args["use_rmst"] = run_arg[2]
+    args.update(run_args)
 
     cv_results = cv_multiple(**args)
     cv_results.parameters = str(args)
     table = cv_results.tabulate()
     aggregate = cv_results.make_agg_table()
 
-    # clinical = "with" if args["include_clinical_variables"] else "without"
-    # l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
-    # depth = "shallow" if args["use_shallow"] else "deep"
-    # rmst = "with" if args["use_rmst"] else "without"
-    #
-    # outname = f"results_classify.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}"
-    # outpath = f"./Data/{today}/{outname}/"
-    # os.makedirs(outpath)
-    # with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
-    #     pickle.dump(cv_results, outfile)
-    # with open(f"{outpath}/{outname}.args", "w") as outfile:
-    #     outfile.write(str(args) + "\n")
-    # table.to_csv(f"{outpath}/{outname}.tsv", sep="\t")
-    # aggregate.to_csv(f"{outpath}/{outname}.agg.tsv", sep="\t")
+    clinical = "with" if args["include_clinical_variables"] else "without"
+    l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
+    depth = "shallow" if args["use_shallow"] else "deep"
+    rmst = "with" if args["use_rmst"] else "without"
+    qnorm = "with" if args["qnorm_coxnet"] else "without"
+    thresh = f"{args["classification_threshold"]/365:.1f}"
+
+    outname = f"results_classify.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}_{qnorm}_qnorm"
+    outpath = f"./Data/{today}/{outname}/"
+    os.makedirs(outpath)
+    with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
+        pickle.dump(cv_results, outfile)
+    with open(f"{outpath}/{outname}.args", "w") as outfile:
+        outfile.write(str(args) + "\n")
+    table.to_csv(f"{outpath}/{outname}.tsv", sep="\t")
+    aggregate.to_csv(f"{outpath}/{outname}.agg.tsv", sep="\t")

@@ -123,7 +123,7 @@ class CV_Result:
         flatten = lambda thing: (thing if (thing is None or len(thing) > 1) else thing[0])
         risk_splits = flatten(self.risk_splits)
         risk_split_quantiles = flatten(self.risk_split_quantiles)
-        risk_counts = self.risk_split_counts.to_dict()
+        risk_counts = self.risk_split_counts.to_dict() if self.risk_split_counts is not None else None
         if self.logranks is None:
             logranks = None
         else:

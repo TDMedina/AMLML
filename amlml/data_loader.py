@@ -393,6 +393,11 @@ class NetworkDataset(Dataset):
     def _debug_set(self):
         return self[:10]
 
+    def class_balance(self):
+        counts = self.class_table.groups.value_counts()
+        balance = counts[0] / counts[1]
+        return balance
+
 def set_intersect_of_genes(*args):
     genesets = [set(dataset.Expression.columns) for dataset in args]
     genes = set.intersection(*genesets)

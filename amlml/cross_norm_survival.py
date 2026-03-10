@@ -87,8 +87,8 @@ def generate_loss_convergence_test(metric="cov", test_loss_slope=True,
     return loss_convergence_test
 
 
-def generate_loss_function(classify: bool):
-    loss_fn = BCEWithLogitsLoss() if classify else CoxPHLoss()
+def generate_loss_function(classify: bool, **kwargs):
+    loss_fn = BCEWithLogitsLoss(**kwargs) if classify else CoxPHLoss(**kwargs)
     if classify:
         def run_loss(predicted, batch):
             loss = loss_fn(predicted, batch.classes)
@@ -169,11 +169,13 @@ def cross_validation_run(dataset: NetworkDataset,
         if hazard_classify:
             bce_loss = BCELoss()
 
-    if filter_ambiguous is not None:
+    if use_rmst and filter_ambiguous is not None:
         dataset = dataset.filter_ambiguous(filter_ambiguous)
 
     if _debug_run:
         dataset = dataset._debug_set()
+    if classify:
+        print(f"Class balance (low/high): {dataset.class_balance():.2f}")
 
     print(f"Running dataset: {dataset.name}")
     if cv_splits == 1:
@@ -274,7 +276,13 @@ def cross_validation_run(dataset: NetworkDataset,
                     mode=lr_cycle_mode, **steps, scale_mode="iterations",
                     )
 
-            run_loss = generate_loss_function(classify)
+            if classify:
+                pos_weight = dataset.class_balance()
+                pos_weight = torch.tensor(pos_weight, dtype=torch.float32, device=DEVICE)
+                loss_kwargs = {"pos_weight": pos_weight}
+            else:
+                loss_kwargs = {}
+            run_loss = generate_loss_function(classify, **loss_kwargs)
             losses_train = []
             losses_val = []
             learning_rates = []
