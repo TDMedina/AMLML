@@ -35,10 +35,10 @@ def read_clinical_columns(col_yaml):
     return cols
 
 
-def prepare_outcomes(outcome_data):
-    outcome_data = tensor(outcome_data.T.astype(float), dtype=float32, device=DEVICE)
-    outcome_data = (outcome_data[0], outcome_data[1])
-    return outcome_data
+# def prepare_outcomes(outcome_data):
+#     outcome_data = tensor(outcome_data.T.astype(float), dtype=float32, device=DEVICE)
+#     outcome_data = (outcome_data[0], outcome_data[1])
+#     return outcome_data
 
 
 def code_categoricals(data):
@@ -47,10 +47,14 @@ def code_categoricals(data):
             data[col] = data[col].cat.codes
 
 
-def add_nan_mask_stack(data):
+def add_nan_mask_stack(data, impute_value="mean"):
     mask_stack = pd.isna(data).astype(int)
     masked = data.copy()
-    for col in masked:
-        masked.loc[pd.isna(masked[col]), col] = 0
+    # if isinstance(impute_value, (int, dict)):
+    #     masked = masked.fillna(impute_value)
+    # elif impute_value == "mean":
+    #     masked = masked.fillna(data.mean().to_dict())
+    # elif impute_value == "mode":
+    #     masked = masked.fillna(data.mode().T[0].to_dict())
     masked = np.stack([masked, mask_stack])
     return masked

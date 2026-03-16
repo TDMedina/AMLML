@@ -118,7 +118,7 @@ def cross_validation_run(dataset: NetworkDataset,
                          network_l1_reg=False, network_l1_alphas=None, network_weight_decay=1e-4,
                          survival_splits=2, cov_threshold=0.01,
                          rel_slope_threshold=0.01,
-                         batch_size=100, epochs=360, epochs_per_cycle=6,
+                         batch_size=100, epochs=360, epochs_per_cycle=6, min_epochs=0,
                          save_network=False,
                          lr_init=None, constant_lr=False, end_with_lr_cycle=False,
                          lr_cycle_mode="triangular",
@@ -194,12 +194,14 @@ def cross_validation_run(dataset: NetworkDataset,
 
         if use_coxnet_alphas:
             print(f"    Calculating lasso penalties...")
-            lasso_data = fold_data.make_expression_table()
-            if qnorm_coxnet:
-                lasso_data = quantile_normalize(lasso_data.drop("Tech", axis=1).astype("float64").T).T
-                lasso_data = zscore_normalize(lasso_data)
-            else:
-                lasso_data = zscore_normalize_genes_by_group(lasso_data)
+            # TODO: Needs to be updated to match new dataloader schema.
+            # lasso_data = fold_data.make_expression_table()
+            # if qnorm_coxnet:
+            #     lasso_data = quantile_normalize(lasso_data.drop("Tech", axis=1).astype("float64").T).T
+            #     lasso_data = zscore_normalize(lasso_data)
+            # else:
+            #     lasso_data = zscore_normalize_genes_by_group(lasso_data)
+            lasso_data = fold_data.z_expression
             alpha_table = test_lasso_penalties(lasso_data,
                                                fold_data.outcomes,
                                                l1_ratio=coxnet_l1_ratio,
@@ -319,13 +321,16 @@ def cross_validation_run(dataset: NetworkDataset,
                     if len(losses_train) >= len_loss_convergence:
                         converge_check = convergence_test(torch.stack(losses_train[-len_loss_convergence:]).cpu().numpy())
                         progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}",
+                                              "Val Loss": f"{losses_val[-1]:.3f}",
                                               "Var": f"{converge_check.score[0]:.4f}",
                                               "Slope": f"{converge_check.score[1]:.4f}"})
-                        if (converge_check.passed and
-                                (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)):
+                        if (converge_check.passed
+                                and (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)
+                                and epoch >= min_epochs):
                             break
                     else:
                         progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}",
+                                              "Val Loss:": f"{losses_val[-1]:.3f}",
                                               "Var": "--",
                                               "Slope": "--"})
 

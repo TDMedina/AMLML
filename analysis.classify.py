@@ -63,6 +63,7 @@ args = dict(
     batch_size=2000,
     # epochs=360,
     epochs=2500,
+    min_epochs=500,
     dropout=0.2,
     leakyrelu=0.1,
 
