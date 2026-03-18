@@ -606,9 +606,11 @@ def _prepare_categorical(data, cols, splits):
     return train, test
 
 
-def _prepare_non_categorical(data, cols, splits):
+def _prepare_non_categorical(data, cols, splits, age_as_binary=False, binary_fill="mode"):
     continuous = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "continuous"]]
     binary = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "binary"]]
+    if age_as_binary:
+        binary["is_adult"] = (data.Covariates["Age at Diagnosis in Days"] < 18*365).astype(int)
     cont_mask, bin_mask = pd.isna(continuous).astype(int), pd.isna(binary).astype(int)
 
     continuous_train, continuous_test = continuous.iloc[splits[0]], continuous.iloc[splits[1]]
@@ -623,9 +625,12 @@ def _prepare_non_categorical(data, cols, splits):
                                        np.stack([continuous_test, cont_mask_test]))
 
     bin_train, bin_test = binary.iloc[splits[0]], binary.iloc[splits[1]]
-    modes = bin_train.mode().T[0].to_dict()
-    bin_train.fillna(modes, inplace=True)
-    bin_test.fillna(modes, inplace=True)
+    if binary_fill == "mode":
+        fill = bin_train.mode().T[0].to_dict()
+    elif binary_fill == "mean":
+        fill = bin_train.mean().to_dict()
+    bin_train.fillna(fill, inplace=True)
+    bin_test.fillna(fill, inplace=True)
     bin_mask_train, bin_mask_test = bin_mask.iloc[splits[0]], bin_mask.iloc[splits[1]]
     bin_mask_train, bin_mask_test = (np.stack([bin_train, bin_mask_train]),
                                      np.stack([bin_test, bin_mask_test]))
@@ -659,7 +664,7 @@ def _prepare_outcomes(data, splits):
 
 
 def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expression,
-                 drop_zero_survivors=True):
+                 drop_zero_survivors=True, age_as_binary=False):
     torch.set_grad_enabled(False)
 
     if drop_zero_survivors:
@@ -671,7 +676,7 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
     splits = list(splitter.split(data, data.index.get_level_values("Tech")))[0]
 
     train_cat, test_cat = _prepare_categorical(data, cols, splits)
-    train_non_cat, test_non_cat = _prepare_non_categorical(data, cols, splits)
+    train_non_cat, test_non_cat = _prepare_non_categorical(data, cols, splits, age_as_binary)
     train_exp, test_exp = _prepare_expression(data, normalization, splits)
     train_z_exp, test_z_exp = _prepare_expression(data, prepare_zscore_expression, splits, as_tensor=False)
     train_outcomes, test_outcomes = _prepare_outcomes(data, splits)
@@ -825,13 +830,14 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
 #             set_ids, group_labels,
 #             expression_table)
 
-def main_loader(normalization: Callable, verbose=True):
+def main_loader(normalization: Callable, verbose=True, age_as_binary=False):
     if verbose:
         print("Reading data...")
     data, cols = read_model_data_pickle()
     if verbose:
         print(f"Preparing method {normalization.__name__}")
-    train, test = prepare_data2(data, cols, normalization=normalization)
+    train, test = prepare_data2(data, cols, normalization=normalization,
+                                age_as_binary=age_as_binary)
     return train, test
 
 #     prepared = prepare_data(*data[:4], normalization=normalization)
