@@ -1,11 +1,15 @@
 
 from collections import defaultdict
+from itertools import product
 from typing import Literal
 
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import numpy as np
 import pandas as pd
+from sklearn.metrics import (precision_recall_fscore_support, classification_report,
+                             accuracy_score, roc_curve, precision_recall_curve,
+                             auc, average_precision_score)
 
 
 def partial_log_likelihood(outcome_table, predictions, eps=1e-7):
@@ -69,17 +73,17 @@ def classify_by_hazard_at_threshold(survival, threshold):
 #     return - log_h.sub(log_cumsum_h).mul(events).sum().div(events.sum())
 
 
-class CV_Result:
+class TestResult:
     def __init__(self, fold, alpha, alpha_index, genes,
-                 n_epochs, lrs, losses_train, losses_val,
-                 pll_train=None, pll_val=None, network=None,
-                 hazards_train=None, hazards_val=None, hazards_baseline=None,
+                 n_epochs, lrs, losses_train, losses_test,
+                 pll_train=None, pll_test=None, network=None,
+                 hazards_train=None, hazards_test=None, hazards_baseline=None,
                  ctd=None, ibs=None,
                  risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
-                 survival_train=None, survival_val=None, first_weights=None,
-                 classes_train=None, classes_val=None,
-                 classify_loss_train=None, classify_loss_val=None,
-                 parameters=None, name=None, km_table_train=None, km_table_val=None):
+                 survival_train=None, survival_test=None, first_weights=None,
+                 classes_train=None, classes_test=None,
+                 classify_loss_train=None, classify_loss_test=None,
+                 parameters=None, name=None, km_table_train=None, km_table_test=None):
         self.fold = fold
         self.alpha = alpha
         self.alpha_index = alpha_index
@@ -87,14 +91,14 @@ class CV_Result:
         self.n_epochs = n_epochs
         self.lrs = lrs
         self.losses_train = losses_train
-        self.losses_val = losses_val
+        self.losses_test = losses_test
         self.pll_train = pll_train
-        self.pll_val = pll_val
+        self.pll_test = pll_test
 
         self.network = network
 
         self.hazards_train = hazards_train
-        self.hazards_val = hazards_val
+        self.hazards_test = hazards_test
         self.hazards_baseline = hazards_baseline
         self.ctd = ctd
         self.ibs = ibs
@@ -104,62 +108,78 @@ class CV_Result:
         self.logranks = logranks
 
         self.survival_train = survival_train
-        self.survival_val = survival_val
+        self.survival_test = survival_test
         self.km_table_train = km_table_train
-        self.km_table_val = km_table_val
+        self.km_table_test = km_table_test
 
         self.classes_train = classes_train
-        self.classes_val = classes_val
+        self.classes_test = classes_test
 
         self.classify_loss_train = classify_loss_train
-        self.classify_loss_val = classify_loss_val
+        self.classify_loss_test = classify_loss_test
 
         self.first_weights = first_weights
         self.parameters = parameters
 
         self.name = name
 
-    def tabulate(self, include_name=True):
+    def tabulate(self, include_name=True, classify=False):
         flatten = lambda thing: (thing if (thing is None or len(thing) > 1) else thing[0])
         risk_splits = flatten(self.risk_splits)
         risk_split_quantiles = flatten(self.risk_split_quantiles)
         risk_counts = self.risk_split_counts.to_dict() if self.risk_split_counts is not None else None
+        accuracy, macro = self.classification_accuracy()
+        roc_auc, youden, euclid = self.roc()[1:]
         if self.logranks is None:
             logranks = None
         else:
             logranks = [round(x.p_value, 3) for x in self.logranks.values()]
             if len(logranks) == 1:
                 logranks = logranks[0]
-        table = pd.DataFrame([dict(
-            alpha_index=self.alpha_index,
-            fold=self.fold,
-            alpha=self.alpha,
-            n_genes=len(self.genes),
-            n_epochs=self.n_epochs,
-            loss_train=self.losses_train[-1],
-            loss_val=self.losses_val[-1],
+        table = pd.DataFrame([{
+            ("model", "alpha_index"): self.alpha_index,
+            ("model", "fold"): self.fold,
+            ("model", "alpha"): self.alpha,
+            ("model", "n_genes"): len(self.genes),
+            ("model", "n_epochs"): self.n_epochs,
+            ("model", "loss_train"): round(self.losses_train[-1], 4),
+            ("model", "loss_test"): round(self.losses_test[-1], 4),
 
-            pll_train_mean=self.pll_train.mean() if self.pll_train is not None else None,
-            pll_val_mean=self.pll_val.mean() if self.pll_val is not None else None,
-            ctd=self.ctd,
-            ibs=self.ibs,
-            risk_splits=risk_splits,
-            risk_split_quantiles=risk_split_quantiles,
-            risk_counts=risk_counts,
-            logranks=logranks,
-            classify_loss_train = self.classify_loss_train,
-            classify_loss_val = self.classify_loss_val,
-            )])
+            ("hazard", "pll_train_mean"): self.pll_train.mean() if self.pll_train is not None else None,
+            ("hazard", "pll_test_mean"): self.pll_test.mean() if self.pll_test is not None else None,
+            ("hazard", "ctd"): self.ctd,
+            ("hazard", "ibs"): self.ibs,
+            ("hazard", "risk_splits"): risk_splits,
+            ("hazard", "risk_split_quantiles"): risk_split_quantiles,
+            ("hazard", "risk_counts"): risk_counts,
+            ("hazard", "logranks"): logranks,
+
+            ("classify", "loss_train"): round(self.classify_loss_train, 4),
+            ("classify", "loss_test"): round(self.classify_loss_test, 4),
+            ("classify", "accuracy"): round(accuracy, 4),
+            ("classify", "macro"): round(macro[2], 4),
+            ("classify", "pr_auc"): round(self.precision_recall()[1], 4),
+            ("classify", "roc_auc"): round(roc_auc, 4),
+            ("classify", "roc_youden"): str([float(round(x, 2)) for x in youden]),
+            ("classify", "roc_euclid"): str([float(round(x, 2)) for x in euclid]),
+
+            }])
         if include_name:
-            table["name"] = self.name
-            table.set_index(["name", "alpha_index", "fold"], inplace=True)
+            table[("model", "name")] = self.name
+            table.set_index([("model", "name"), ("model", "alpha_index"), ("model", "fold")],
+                            inplace=True)
+            table.index.names = [x[1] for x in table.index.names]
+        table.columns = pd.MultiIndex.from_tuples(table.columns)
+        if classify:
+            table = table[["model", "classify"]]
+            table.drop([("classify", "loss_train"), ("classify", "loss_test")], axis=1)
         return table
 
     def plot_loss(self, _as_subplot=False):
         subplots = []
         data = [
-            ("training", "blue", self.losses_train),
-            ("validation", "red", self.losses_val)
+            ("Train", "blue", self.losses_train),
+            ("Test", "red", self.losses_test)
             ]
         for name, color, loss in data:
                 subplot = go.Scatter(x=list(range(1, len(loss)+1)), y=loss,
@@ -174,7 +194,7 @@ class CV_Result:
 
     def plot_pll(self):
         fig = go.Figure()
-        for name, data in [("Train", self.pll_train), ("Val", self.pll_val)]:
+        for name, data in [("Train", self.pll_train), ("Test", self.pll_test)]:
             fig.add_trace(go.Histogram(x=data.abs(), name=name))
         return fig
 
@@ -187,17 +207,17 @@ class CV_Result:
         figure = go.Figure(subplot)
         return figure
 
-    def tabulate_predictions(self, data=Literal["train", "val"]):
+    def tabulate_predictions(self, data=Literal["train", "test"]):
         data = self.__getattribute__(f"classes_{data}")
-        table = (data.groupby("Training")["Predicted"]
+        table = (data.groupby(data.title())["Predicted"]
                  .agg(group0=lambda x: (x < 0.5).sum(),
                       group1=lambda x: (x >= 0.5).sum()))
         return table
 
     def plot_predictions(self):
         fig = make_subplots(1, 2)
-        for i, (name, data) in enumerate(zip(["Training", "Validation"],
-                                         [self.classes_train, self.classes_val]),
+        for i, (name, data) in enumerate(zip(["Train", "Test"],
+                                         [self.classes_train, self.classes_test]),
                                          start=1):
             fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, name],
                                      y=data.loc[data.Predicted < 0.5, "Predicted"],
@@ -205,6 +225,68 @@ class CV_Result:
             fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, name],
                                      y=data.loc[data.Predicted >= 0.5, "Predicted"],
                                      mode="markers", name=name), col=i, row=1)
+        return fig
+
+    def roc(self):
+        data = (self.classes_test.Test, self.classes_test.Predicted)
+        roc = pd.DataFrame(dict(zip(["FPR", "TPR", "Threshold"], roc_curve(*data))))
+        roc_auc = auc(roc.FPR, roc.TPR)
+        youden = roc.iloc[np.argmax(roc.TPR - roc.FPR)]
+        euclid = roc.iloc[np.argmin(np.sqrt(roc.FPR ** 2 + (roc.TPR - 1) ** 2))]
+        return roc, roc_auc, youden, euclid
+
+    def precision_recall(self):
+        data = (self.classes_test.Test, self.classes_test.Predicted)
+        pr = list(precision_recall_curve(*data))
+        pr[-1] = np.append(pr[-1], 1)
+        pr = pd.DataFrame(dict(zip(["Precision", "Recall", "Threshold"], pr)))
+        pr_auc = average_precision_score(*data)
+        return pr, pr_auc
+
+    def plot_roc_and_pr_curve(self):
+        roc, roc_auc, youden, euclid = self.roc()
+        pr, pr_auc = self.precision_recall()
+
+        fig = make_subplots(rows=1, cols=2, subplot_titles=["ROC Curve", "PR Curve"])
+        fig.add_trace(
+            trace=go.Scatter(x=roc.FPR, y=roc.TPR, mode="lines",
+                             customdata=pr.Threshold,
+                             hovertemplate=("<b>Threshold:</b> %{customdata:.4f}<br>"
+                                            "<b>FPR:</b> %{x:.4f}<br>"
+                                            "<b>TPR:</b> %{y:.4f}<br>"
+                                            "<extra></extra>")),
+            row=1, col=1)
+        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines", showlegend=False,
+                                 line_dash="dash", line_color="red"), row=1, col=1)
+        fig.update_xaxes(title_text="FPR", row=1, col=1)
+        fig.update_yaxes(title_text="TPR", row=1, col=1)
+        fig.add_annotation(text=f"ROC AUC={roc_auc:.3f}",
+                           xref="x1", yref="y1",
+                           x=0.75, y=0.25, showarrow=False)
+        fig.add_annotation(text=f"Youden J={youden.Threshold:.3f}",
+                           xref="x1", yref="y1",
+                           x=youden.FPR, y=youden.TPR, showarrow=True)
+        fig.add_annotation(text=f"Euclidean={euclid.Threshold:.3f}",
+                           xref="x1", yref="y1",
+                           x=euclid.FPR, y=euclid.TPR, showarrow=True)
+
+        fig.add_trace(
+            trace=go.Scatter(x=pr.Recall, y=pr.Precision, mode="lines",
+                             customdata=pr.Threshold,
+                             hovertemplate=("<b>Threshold:</b> %{customdata:.4f}<br>"
+                                            "<b>Recall:</b> %{x:.4f}<br>"
+                                            "<b>Precision:</b> %{y:.4f}<br>"
+                                            "<extra></extra>")),
+            row=1, col=2)
+        baseline = self.classes_test.Test.mean()
+        fig.add_hline(y=baseline, row=1, col=2, line_dash="dash", line_color="red",
+                      showlegend=False)
+        fig.update_xaxes(title_text="Recall", row=1, col=2)
+        fig.update_yaxes(title_text="Precision", row=1, col=2)
+        fig.add_annotation(text=f"PR AUC = {pr_auc:.2f}", xref="x2", yref="y2",
+                           x=0.5, y=baseline+0.1, showarrow=False)
+        fig.update_layout(showlegend=False)
+
         return fig
 
     def rank_covariates(self, dataset, cols, embedded_dims=None):
@@ -217,27 +299,41 @@ class CV_Result:
         ranked = pd.DataFrame(zip(covariates, regs), columns=["covariate", "reg_weight"]).sort_values("reg_weight")
         return ranked
 
+    def classification_report(self):
+        report = classification_report(self.classes_test.Test,
+                                       self.classes_test.Classification)
+        return report
 
-class CV_ResultsCollection:
-    def __init__(self, results: list[CV_Result], methods=None, folds_per=None):
+    def classification_accuracy(self):
+        accuracy = accuracy_score(self.classes_test.Test,
+                                  self.classes_test.Classification)
+        macro = precision_recall_fscore_support(self.classes_test.Test,
+                                                self.classes_test.Classification,
+                                                average="macro")
+        return accuracy, macro
+
+
+class TestResultCollection:
+    def __init__(self, results: list[TestResult], methods=None, folds_per=None):
         self.results = results
         self.methods = methods
         self.folds_per = folds_per
 
-    def tabulate(self):
-        tables = [x.tabulate() for x in self.results]
+    def tabulate(self, classify=False):
+        tables = [x.tabulate(classify=classify) for x in self.results]
         table = pd.concat(tables, axis=0)
         return table
 
-    def make_agg_table(self):
-        table = self.tabulate()
-        table = (table[["alpha", "n_genes", "n_epochs",
-                        "pll_train_mean", "pll_val_mean",
-                        "loss_train", "loss_val",
-                        "ctd", "ibs",
-                        "classify_loss_train", "classify_loss_val"]]
-                 .groupby(["name", "alpha_index"])
-                 .mean())
+    def make_agg_table(self, classify=False):
+        if classify:
+            drop = list(product(["classify"], ["roc_youden", "roc_euclid"]))
+        else:
+            drop = [*product(["hazard"], ["risk_splits", "risk_split_quantiles",
+                                          "risk_counts", "logranks"]),
+                    *product(["classify"], ["roc_youden", "roc_euclid", "loss_train", "loss_test"])]
+
+        table = self.tabulate(classify=classify).drop(drop, axis=1)
+        table = table.groupby(["name", "alpha_index"]).mean()
         return table
 
     def _plot(self, plot_fn):
@@ -281,207 +377,233 @@ class CV_ResultsCollection:
         figure = self._plot("plot_lr")
         return figure
 
-
-
-class TestResult:
-    def __init__(self, alpha, genes,
-                 n_epochs, lrs, losses_train, loss_test,
-                 pll_train=None, pll_test=None, network=None,
-                 hazards_train=None, hazards_test=None, hazards_baseline=None,
-                 ctd=None, ibs=None,
-                 risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
-                 survival_train=None, survival_test=None, first_weights=None,
-                 classes_train=None, classes_test=None,
-                 classify_loss_train=None, classify_loss_test=None,
-                 parameters=None, name=None, km_table_train=None, km_table_test=None):
-        self.alpha = alpha
-        self.genes = genes
-        self.n_epochs = n_epochs
-        self.lrs = lrs
-        self.losses_train = losses_train
-        self.loss_test = loss_test
-        self.pll_train = pll_train
-        self.pll_test = pll_test
-
-        self.network = network
-
-        self.hazards_train = hazards_train
-        self.hazards_test = hazards_test
-        self.hazards_baseline = hazards_baseline
-        self.ctd = ctd
-        self.ibs = ibs
-        self.risk_splits = risk_splits
-        self.risk_split_quantiles = risk_split_quantiles
-        self.risk_split_counts = risk_split_counts
-        self.logranks = logranks
-
-        self.survival_train = survival_train
-        self.survival_test = survival_test
-        self.km_table_train = km_table_train
-        self.km_table_test = km_table_test
-
-        self.classes_train = classes_train
-        self.classes_test = classes_test
-
-        self.classify_loss_train = classify_loss_train
-        self.classify_loss_test = classify_loss_test
-
-        self.first_weights = first_weights
-        self.parameters = parameters
-
-        self.name = name
-
-    def tabulate(self, include_name=True):
-        risk_splits = (self.risk_splits
-                       if (self.risk_splits is None or len(self.risk_splits) > 1)
-                       else self.risk_splits[0])
-        if self.logranks is None:
-            logranks = None
-        else:
-            logranks = [round(x.p_value, 3) for x in self.logranks.values()]
-            if len(logranks) == 1:
-                logranks = logranks[0]
-        table = pd.DataFrame([dict(
-            alpha=self.alpha,
-            n_genes=len(self.genes),
-            n_epochs=self.n_epochs,
-            loss_train=self.losses_train[-1],
-            loss_test=self.loss_test,
-
-            pll_train_mean=self.pll_train.mean() if self.pll_train is not None else None,
-            pll_test_mean=self.pll_test.mean() if self.pll_test is not None else None,
-            ctd=self.ctd,
-            ibs=self.ibs,
-            risk_splits=risk_splits,
-            logranks=logranks,
-            classify_loss_train = self.classify_loss_train,
-            classify_loss_test = self.classify_loss_test,
-            )])
-        if include_name:
-            table["name"] = self.name
-            table.set_index(["name"], inplace=True)
-        return table
-
-    # TODO: Plots.
-    def plot_loss(self, _as_subplot=False):
-        subplots = []
-        data = [
-            ("training", "blue", self.losses_train),
-            ("validation", "red", self.losses_val)
-            ]
-        for name, color, loss in data:
-                subplot = go.Scatter(x=list(range(1, len(loss)+1)), y=loss,
-                                     mode="lines", name=name,
-                                     marker_color=color, line_color=color,
-                                     legendgroup=name)
-                subplots.append(subplot)
-        if _as_subplot:
-            return subplots
-        figure = go.Figure(subplots)
-        return figure
-
-    def plot_pll(self):
-        fig = go.Figure()
-        for name, data in [("Train", self.pll_train), ("Val", self.pll_val)]:
-            fig.add_trace(go.Histogram(x=data.abs(), name=name))
-        return fig
-
-    def plot_lr(self, _as_subplot=False):
-        subplot = go.Scatter(x=list(range(1, len(self.lrs)+1)), y=self.lrs,
-                             mode="markers+lines", name="Learning Rate",
-                             marker_color="blue", line_color="blue")
-        if _as_subplot:
-            return [subplot]
-        figure = go.Figure(subplot)
-        return figure
-
-    def tabulate_predictions(self, data=Literal["train", "val"]):
-        data = self.__getattribute__(f"classes_{data}")
-        table = (data.groupby("Training")["Predicted"]
-                 .agg(group0=lambda x: (x < 0.5).sum(),
-                      group1=lambda x: (x >= 0.5).sum()))
-        return table
-
-    def plot_predictions(self):
-        fig = make_subplots(1, 2)
-        for i, (name, data) in enumerate(zip(["Train", "Val"],
-                                         [self.classes_train, self.classes_val]),
-                                         start=1):
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, "Training"],
-                                     y=data.loc[data.Predicted < 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i)
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, "Training"],
-                                     y=data.loc[data.Predicted >= 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i)
-        return fig
-
-    def rank_covariates(self, dataset, cols, embedded_dims=None):
-        if embedded_dims is None:
-            embedded_dims = {"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3}
-        covariates = [y for x, dims in embedded_dims.items() for y in [x]*dims]
-        covariates = covariates + [var for var, type_ in cols["Covariates"].items() if type_ != "categorical"]
-        covariates = list(dataset.genes) + covariates
-        regs = np.abs(self.first_weights).sum(axis=0)
-        ranked = pd.DataFrame(zip(covariates, regs), columns=["covariate", "reg_weight"]).sort_values("reg_weight")
-        return ranked
-
-
-# TODO:
-class TestResultsCollection:
-    def __init__(self, results: list[TestResult], methods=None):
-        self.results = results
-        self.methods = methods
-
-    def tabulate(self):
-        tables = [x.tabulate() for x in self.results]
-        table = pd.concat(tables, axis=0)
-        return table
-
-    def make_agg_table(self):
-        table = self.tabulate()
-        table = (table[["alpha", "n_genes", "n_epochs",
-                        "pll_train_mean", "pll_test_mean",
-                        "loss_train", "loss_test",
-                        "ctd", "ibs",
-                        "classify_loss_train", "classify_loss_test"]]
-                 .groupby(["name"])
-                 .mean())
-        return table
-
-    def _plot(self, plot_fn):
-        rows = len(self.methods)
-        figure = make_subplots(rows=rows, cols=1)
-        for i in range(rows):
-            results = self.results[i]
-            subplots = results.__getattribute__(plot_fn)(_as_subplot=True)
-            for subplot in subplots:
-                figure.add_trace(subplot, row=i + 1, col=1)
-        return figure
-
-    def plot_method_loss(self):
-        figs = []
-        for method in self.methods:
-            results = [result for result in self.results if method in result.name]
-            fig = make_subplots(rows=1,
-                                cols=len(results),
-                                x_title="Alpha", y_title="Fold")
-            for i, result in enumerate(results, start=1):
-                traces = result.plot_loss(_as_subplot=True)
-                for trace in traces:
-                    fig.add_trace(trace, row=1, col=i)
-            fig.update_layout(title=method)
-            fig.update_yaxes(range=[0, 1])
-            figs.append(fig)
-        return figs
-
-    def plot_loss(self):
-        figure = self._plot("plot_loss")
-        return figure
-
-    def plot_pll(self):
-        figure = self._plot("plot_pll")
-        return figure
-
-    def plot_lr(self):
-        figure = self._plot("plot_lr")
-        return figure
+# class TestResult(CV_Result):
+#     def __init__(self, alpha, genes,
+#                  n_epochs, lrs, losses_train, losses_test,
+#                  pll_train=None, pll_test=None, network=None,
+#                  hazards_train=None, hazards_test=None, hazards_baseline=None,
+#                  ctd=None, ibs=None,
+#                  risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
+#                  survival_train=None, survival_test=None, first_weights=None,
+#                  classes_train=None, classes_test=None,
+#                  classify_loss_train=None, classify_loss_test=None,
+#                  parameters=None, name=None, km_table_train=None, km_table_test=None):
+#         super().__init__(fold=0, alpha=alpha, alpha_index=0, genes=genes,
+#               n_epochs=n_epochs, lrs=lrs,
+#               losses_train=losses_train, losses_val=losses_test,
+#               pll_train=pll_train, pll_val=pll_test,
+#               network=network,
+#               hazards_train=hazards_train, hazards_val=hazards_test, hazards_baseline=hazards_baseline,
+#               ctd=ctd, ibs=ibs,
+#               risk_splits=risk_splits, risk_split_quantiles=risk_split_quantiles,
+#               risk_split_counts=risk_split_counts, logranks=logranks,
+#               survival_train=survival_train, survival_val=survival_test,
+#               first_weights=first_weights,
+#               classes_train=classes_train, classes_val=classes_test,
+#               classify_loss_train=classify_loss_train, classify_loss_val=classify_loss_test,
+#               parameters=parameters,
+#               name=name,
+#               km_table_train=km_table_train, km_table_val=km_table_test)
+#
+# class TestResult:
+#     def __init__(self, alpha, genes,
+#                  n_epochs, lrs, losses_train, loss_test,
+#                  pll_train=None, pll_test=None, network=None,
+#                  hazards_train=None, hazards_test=None, hazards_baseline=None,
+#                  ctd=None, ibs=None,
+#                  risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
+#                  survival_train=None, survival_test=None, first_weights=None,
+#                  classes_train=None, classes_test=None,
+#                  classify_loss_train=None, classify_loss_test=None,
+#                  parameters=None, name=None, km_table_train=None, km_table_test=None):
+#         self.alpha = alpha
+#         self.genes = genes
+#         self.n_epochs = n_epochs
+#         self.lrs = lrs
+#         self.losses_train = losses_train
+#         self.loss_test = loss_test
+#         self.pll_train = pll_train
+#         self.pll_test = pll_test
+#
+#         self.network = network
+#
+#         self.hazards_train = hazards_train
+#         self.hazards_test = hazards_test
+#         self.hazards_baseline = hazards_baseline
+#         self.ctd = ctd
+#         self.ibs = ibs
+#         self.risk_splits = risk_splits
+#         self.risk_split_quantiles = risk_split_quantiles
+#         self.risk_split_counts = risk_split_counts
+#         self.logranks = logranks
+#
+#         self.survival_train = survival_train
+#         self.survival_test = survival_test
+#         self.km_table_train = km_table_train
+#         self.km_table_test = km_table_test
+#
+#         self.classes_train = classes_train
+#         self.classes_test = classes_test
+#
+#         self.classify_loss_train = classify_loss_train
+#         self.classify_loss_test = classify_loss_test
+#
+#         self.first_weights = first_weights
+#         self.parameters = parameters
+#
+#         self.name = name
+#
+#     def tabulate(self, include_name=True):
+#         risk_splits = (self.risk_splits
+#                        if (self.risk_splits is None or len(self.risk_splits) > 1)
+#                        else self.risk_splits[0])
+#         if self.logranks is None:
+#             logranks = None
+#         else:
+#             logranks = [round(x.p_value, 3) for x in self.logranks.values()]
+#             if len(logranks) == 1:
+#                 logranks = logranks[0]
+#         table = pd.DataFrame([dict(
+#             alpha=self.alpha,
+#             n_genes=len(self.genes),
+#             n_epochs=self.n_epochs,
+#             loss_train=self.losses_train[-1],
+#             loss_test=self.loss_test,
+#
+#             pll_train_mean=self.pll_train.mean() if self.pll_train is not None else None,
+#             pll_test_mean=self.pll_test.mean() if self.pll_test is not None else None,
+#             ctd=self.ctd,
+#             ibs=self.ibs,
+#             risk_splits=risk_splits,
+#             logranks=logranks,
+#             classify_loss_train = self.classify_loss_train,
+#             classify_loss_test = self.classify_loss_test,
+#             )])
+#         if include_name:
+#             table["name"] = self.name
+#             table.set_index(["name"], inplace=True)
+#         return table
+#
+#     # TODO: Plots.
+#     def plot_loss(self, _as_subplot=False):
+#         subplots = []
+#         data = [
+#             ("training", "blue", self.losses_train),
+#             ("validation", "red", self.losses_val)
+#             ]
+#         for name, color, loss in data:
+#                 subplot = go.Scatter(x=list(range(1, len(loss)+1)), y=loss,
+#                                      mode="lines", name=name,
+#                                      marker_color=color, line_color=color,
+#                                      legendgroup=name)
+#                 subplots.append(subplot)
+#         if _as_subplot:
+#             return subplots
+#         figure = go.Figure(subplots)
+#         return figure
+#
+#     def plot_pll(self):
+#         fig = go.Figure()
+#         for name, data in [("Train", self.pll_train), ("Val", self.pll_val)]:
+#             fig.add_trace(go.Histogram(x=data.abs(), name=name))
+#         return fig
+#
+#     def plot_lr(self, _as_subplot=False):
+#         subplot = go.Scatter(x=list(range(1, len(self.lrs)+1)), y=self.lrs,
+#                              mode="markers+lines", name="Learning Rate",
+#                              marker_color="blue", line_color="blue")
+#         if _as_subplot:
+#             return [subplot]
+#         figure = go.Figure(subplot)
+#         return figure
+#
+#     def tabulate_predictions(self, data=Literal["train", "val"]):
+#         data = self.__getattribute__(f"classes_{data}")
+#         table = (data.groupby("Training")["Predicted"]
+#                  .agg(group0=lambda x: (x < 0.5).sum(),
+#                       group1=lambda x: (x >= 0.5).sum()))
+#         return table
+#
+#     def plot_predictions(self):
+#         fig = make_subplots(1, 2)
+#         for i, (name, data) in enumerate(zip(["Train", "Val"],
+#                                          [self.classes_train, self.classes_val]),
+#                                          start=1):
+#             fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, "Training"],
+#                                      y=data.loc[data.Predicted < 0.5, "Predicted"],
+#                                      mode="markers", name=name), col=i)
+#             fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, "Training"],
+#                                      y=data.loc[data.Predicted >= 0.5, "Predicted"],
+#                                      mode="markers", name=name), col=i)
+#         return fig
+#
+#     def rank_covariates(self, dataset, cols, embedded_dims=None):
+#         if embedded_dims is None:
+#             embedded_dims = {"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3}
+#         covariates = [y for x, dims in embedded_dims.items() for y in [x]*dims]
+#         covariates = covariates + [var for var, type_ in cols["Covariates"].items() if type_ != "categorical"]
+#         covariates = list(dataset.genes) + covariates
+#         regs = np.abs(self.first_weights).sum(axis=0)
+#         ranked = pd.DataFrame(zip(covariates, regs), columns=["covariate", "reg_weight"]).sort_values("reg_weight")
+#         return ranked
+#
+#
+# # TODO:
+# class TestResultsCollection:
+#     def __init__(self, results: list[TestResult], methods=None):
+#         self.results = results
+#         self.methods = methods
+#
+#     def tabulate(self):
+#         tables = [x.tabulate() for x in self.results]
+#         table = pd.concat(tables, axis=0)
+#         return table
+#
+#     def make_agg_table(self):
+#         table = self.tabulate()
+#         table = (table[["alpha", "n_genes", "n_epochs",
+#                         "pll_train_mean", "pll_test_mean",
+#                         "loss_train", "loss_test",
+#                         "ctd", "ibs",
+#                         "classify_loss_train", "classify_loss_test"]]
+#                  .groupby(["name"])
+#                  .mean())
+#         return table
+#
+#     def _plot(self, plot_fn):
+#         rows = len(self.methods)
+#         figure = make_subplots(rows=rows, cols=1)
+#         for i in range(rows):
+#             results = self.results[i]
+#             subplots = results.__getattribute__(plot_fn)(_as_subplot=True)
+#             for subplot in subplots:
+#                 figure.add_trace(subplot, row=i + 1, col=1)
+#         return figure
+#
+#     def plot_method_loss(self):
+#         figs = []
+#         for method in self.methods:
+#             results = [result for result in self.results if method in result.name]
+#             fig = make_subplots(rows=1,
+#                                 cols=len(results),
+#                                 x_title="Alpha", y_title="Fold")
+#             for i, result in enumerate(results, start=1):
+#                 traces = result.plot_loss(_as_subplot=True)
+#                 for trace in traces:
+#                     fig.add_trace(trace, row=1, col=i)
+#             fig.update_layout(title=method)
+#             fig.update_yaxes(range=[0, 1])
+#             figs.append(fig)
+#         return figs
+#
+#     def plot_loss(self):
+#         figure = self._plot("plot_loss")
+#         return figure
+#
+#     def plot_pll(self):
+#         figure = self._plot("plot_pll")
+#         return figure
+#
+#     def plot_lr(self):
+#         figure = self._plot("plot_lr")
+#         return figure

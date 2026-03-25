@@ -155,6 +155,17 @@ class NetworkDataset(Dataset):
         return table
 
     @property
+    def all_variables(self):
+        if len(self.expression.shape) > 2:
+            expression = self.expression.sum(axis=1)
+        else:
+            expression = self.expression
+        all_vars = torch.concat([expression, self.categoricals,
+                                 self.non_categoricals[:, 0, :]],
+                                dim=-1)
+        return all_vars
+
+    @property
     def network_args(self):
         return self.expression, self.categoricals, self.non_categoricals
 
@@ -606,7 +617,7 @@ def _prepare_categorical(data, cols, splits):
     return train, test
 
 
-def _prepare_non_categorical(data, cols, splits, age_as_binary=False, binary_fill="mode"):
+def _prepare_non_categorical(data, cols, splits, age_as_binary=True, binary_fill="mode"):
     continuous = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "continuous"]]
     binary = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "binary"]]
     if age_as_binary:
@@ -664,7 +675,7 @@ def _prepare_outcomes(data, splits):
 
 
 def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expression,
-                 drop_zero_survivors=True, age_as_binary=False):
+                 drop_zero_survivors=True, age_as_binary=True):
     torch.set_grad_enabled(False)
 
     if drop_zero_survivors:
@@ -830,7 +841,7 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
 #             set_ids, group_labels,
 #             expression_table)
 
-def main_loader(normalization: Callable, verbose=True, age_as_binary=False):
+def main_loader(normalization: Callable, verbose=True, age_as_binary=True):
     if verbose:
         print("Reading data...")
     data, cols = read_model_data_pickle()
@@ -860,7 +871,7 @@ def main_loader(normalization: Callable, verbose=True, age_as_binary=False):
 #             expression_table)
 
 
-def normalization_generator(methods=None, verbose=False):
+def normalization_generator(methods=None, verbose=False, age_as_binary=True):
     if methods is None:
         methods = [prepare_log2_expression, prepare_zscore_expression,
                    prepare_npn_expression, prepare_supermodel_expression,
@@ -876,7 +887,7 @@ def normalization_generator(methods=None, verbose=False):
             network_type = CrossNormalizedModel
         if verbose:
             print(f"Preparing method {norm_method.__name__}")
-        train, test = prepare_data2(data, cols, norm_method)
+        train, test = prepare_data2(data, cols, norm_method, age_as_binary=age_as_binary)
         yield network_type, (train, test)
         # prepared = prepare_data(*data[:4], normalization=norm_method)
         # split = split_test_data(data[0], *prepared, *data[-2:])

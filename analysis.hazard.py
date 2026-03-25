@@ -33,7 +33,7 @@ args = dict(
     remove_age_over=None,
     restrict_tech=None,
     minimum_duration=None,
-    filter_minimum_censorship=None,
+    filter_minimum_censorship=30,
     filter_events=None,
     filter_ambiguous=None,
     include_clinical_variables=False,
@@ -60,7 +60,7 @@ args = dict(
     batch_size=2000,
     # epochs=360,
     epochs=2500,
-    min_epochs=500,
+    min_epochs=1000,
     dropout=0.2,
     leakyrelu=0,
 
@@ -76,14 +76,14 @@ args = dict(
     bellows_normalization=False,
     use_shallow=True,
     minimum_penultimate_size=4,
-    shrinkage_factor=10,
+    shrinkage_factor=2,
     kaiming_weights=True,
 
     # Classifier model.
     classify=False,
     hazard_classify=True,
-    use_rmst=True, rmst_max_time=7*365, rmst_tukey_factor=None,
-    classification_threshold=2038,
+    use_rmst=True, rmst_max_time=365, rmst_tukey_factor=None,
+    classification_threshold=365,
 
     # Outputs.
     save_network=False,

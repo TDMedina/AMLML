@@ -63,7 +63,7 @@ args = dict(
     batch_size=2000,
     # epochs=360,
     epochs=2500,
-    min_epochs=500,
+    min_epochs=1000,
     dropout=0.2,
     leakyrelu=0.1,
 
@@ -85,8 +85,8 @@ args = dict(
     # Classifier model.
     classify=True,
     hazard_classify=False,
-    use_rmst=True, rmst_max_time=7*365, rmst_tukey_factor=None,
-    classification_threshold=7*365,
+    use_rmst=True, rmst_max_time=1*365, rmst_tukey_factor=None,
+    classification_threshold=1*365,
 
     # Outputs.
     save_network=False,
@@ -116,8 +116,8 @@ for run_args in iter_args:
 
     cv_results = cv_multiple(**args)
     cv_results.parameters = str(args)
-    table = cv_results.tabulate()
-    aggregate = cv_results.make_agg_table()
+    table = cv_results.tabulate(classify=True)
+    aggregate = cv_results.make_agg_table(classify=True)
 
     clinical = "with" if args["include_clinical_variables"] else "without"
     l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"

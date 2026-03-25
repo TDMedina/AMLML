@@ -32,7 +32,8 @@ from amlml.km import optimize_survival_splits, iterate_logrank_tests
 from amlml.data_loader import NetworkDataset
 from amlml.cross_normalization import zscore_normalize_genes_by_group, zscore_normalize
 from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
-                              CV_Result, CV_ResultsCollection, classify_by_hazard_at_threshold)
+                              TestResult, TestResultCollection,
+                              classify_by_hazard_at_threshold)
 
 
 if torch.cuda.is_available():
@@ -348,11 +349,13 @@ def cross_validation_run(dataset: NetworkDataset,
                                                      alpha_data.classes.squeeze().tolist(),
                                                      sigmoid(predictions_train).squeeze().tolist()),
                                                  columns=["Event", "Training", "Predicted"])
+                    classes_train["Classification"] = (classes_train.Predicted >= 0.5).astype(int)
                     classes_val = pd.DataFrame(zip(alpha_val.events.squeeze().tolist(),
                                                    alpha_val.classes.squeeze().tolist(),
                                                    sigmoid(predictions_val).squeeze().tolist()),
-                                               columns=["Event", "Validation", "Predicted"])
-                    results.append(CV_Result(
+                                               columns=["Event", "Test", "Predicted"])
+                    classes_val["Classification"] = (classes_val.Predicted >= 0.5).astype(int)
+                    results.append(TestResult(
                         fold=i,
                         alpha=alpha,
                         alpha_index=j,
@@ -360,13 +363,13 @@ def cross_validation_run(dataset: NetworkDataset,
                         n_epochs=epoch,
                         lrs=[float(x[0]) for x in learning_rates],
                         losses_train=losses_train,
-                        losses_val=losses_val,
+                        losses_test=losses_val,
                         name=dataset.name,
                         classes_train=classes_train,
-                        classes_val=classes_val,
+                        classes_test=classes_val,
                         network=network if save_network else None,
                         classify_loss_train = losses_train[-1],
-                        classify_loss_val = losses_val[-1],
+                        classify_loss_test = losses_val[-1],
                         first_weights=first_weights
                         ))
                     continue
@@ -392,15 +395,17 @@ def cross_validation_run(dataset: NetworkDataset,
                     classes_val = classify_by_hazard_at_threshold(survival_val,
                                                                   dataset.class_threshold)
                     classify_loss_train = bce_loss(torch.tensor(classes_train, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                                   alpha_data.classes)
+                                                   alpha_data.classes).item()
                     classify_loss_val = bce_loss(torch.tensor(classes_val, dtype=torch.float32, device=DEVICE).view(-1, 1),
-                                                 alpha_val.classes)
+                                                 alpha_val.classes).item()
                     classes_train = pd.DataFrame(zip(alpha_data.classes.squeeze().tolist(),
                                                      classes_train),
                                                  columns=["Training", "Predicted"])
+                    classes_train["Classification"] = (classes_train.Predicted >= 0.5).astype(int)
                     classes_val = pd.DataFrame(zip(alpha_val.classes.squeeze().tolist(),
                                                    classes_val),
-                                               columns=["Validation", "Predicted"])
+                                               columns=["Test", "Predicted"])
+                    classes_val["Classification"] = (classes_val.Predicted >= 0.5).astype(int)
                 else:
                     classes_train, classes_val = None, None
                     classify_loss_train, classify_loss_val = None, None
@@ -436,7 +441,7 @@ def cross_validation_run(dataset: NetworkDataset,
                     km_val_df.loc[km_val_df["risk"] > cutoff, "group"] = group
                 logranks = iterate_logrank_tests(km_val_df)
 
-                results.append(CV_Result(
+                results.append(TestResult(
                     fold=i,
                     alpha=alpha,
                     alpha_index=j,
@@ -444,15 +449,15 @@ def cross_validation_run(dataset: NetworkDataset,
                     n_epochs=epoch,
                     lrs=[float(x[0]) for x in learning_rates],
                     losses_train=losses_train,
-                    losses_val=losses_val,
+                    losses_test=losses_val,
                     pll_train=partial_log_likelihood(alpha_data.outcome_target_table,
                                                      predictions_train),
-                    pll_val=partial_log_likelihood(alpha_val.outcome_target_table,
-                                                   predictions_val),
+                    pll_test=partial_log_likelihood(alpha_val.outcome_target_table,
+                                                    predictions_val),
                     network=network if save_network else None,
                     name=dataset.name,
                     hazards_train=predictions_train,
-                    hazards_val=predictions_val,
+                    hazards_test=predictions_val,
                     hazards_baseline=baseline_hazards,
                     ibs=ibs,
                     ctd=ctd,
@@ -461,16 +466,16 @@ def cross_validation_run(dataset: NetworkDataset,
                     risk_split_counts=km_val_df.group.value_counts(),
                     logranks=logranks,
                     survival_train=survival_train,
-                    survival_val=survival_val,
+                    survival_test=survival_val,
                     classes_train=classes_train,
-                    classes_val=classes_val,
+                    classes_test=classes_val,
                     classify_loss_train=classify_loss_train,
-                    classify_loss_val=classify_loss_val,
+                    classify_loss_test=classify_loss_val,
                     first_weights=first_weights,
                     km_table_train=km_df,
-                    km_table_val=km_val_df
+                    km_table_test=km_val_df
                     ))
-    results = CV_ResultsCollection(results, None, cv_splits)
+    results = TestResultCollection(results, None, cv_splits)
     return results
 
 
@@ -483,7 +488,7 @@ def cv_multiple(datasets: list[tuple[Callable, NetworkDataset]], **kwargs):
                                            **kwargs)
         results.extend(sub_results.results)
     print("Collating results...")
-    results = CV_ResultsCollection(results, names, kwargs["cv_splits"])
+    results = TestResultCollection(results, names, kwargs["cv_splits"])
     return results
 
 
