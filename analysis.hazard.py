@@ -36,11 +36,11 @@ args = dict(
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    cv_splits=5,  # Default = 5
+    cv_splits=5,
 
     # Training.
-    cov_threshold=0.00105,  # Default = 0.01
-    rel_slope_threshold=0.00105,  # Default = 0.01
+    cov_threshold=0.00105,
+    rel_slope_threshold=0.00105,
     # batch_size=350,
     batch_size=2000,
     # epochs=360,

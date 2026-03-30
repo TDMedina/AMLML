@@ -18,47 +18,29 @@ from amlml.data_loader import (
     prepare_zupermodel_expression
     )
 
-methods = [
-    prepare_log2_expression,
-    # prepare_zscore_expression,
-    # prepare_npn_expression,
-    # prepare_qn_expression,
-    # prepare_qnz_expression,
-    # prepare_supermodel_expression,
-    # prepare_zupermodel_expression
-]
 
 args = dict(
-    datasets=normalization_generator(methods=[methods], verbose=True),
-    remove_age_over=None,
-    restrict_tech=None,
-    minimum_duration=None,
-    filter_minimum_censorship=30,
-    filter_events=None,
     filter_ambiguous=30,
     include_clinical_variables=False,
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
-    use_coxnet_alphas=True,
-    # coxnet_n_alphas=10,
-    coxnet_n_alphas=5,
-    coxnet_alpha_min_ratio=1/16,
+    feature_selector="coxnet",
+
+    coxnet_n_alphas=5,  # Note: Reset this.
+    coxnet_alpha_min_ratio=1/16,  # Note: Reset this to 1/64.
     coxnet_alphas=None,
     qnorm_coxnet=False,  # Note: New.
 
-    network_l1_reg=False,
     network_l1_alphas=[0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    cv_splits=3,  # Note: Reset this.
+    cv_splits=5,
 
     # Training.
-    # cov_threshold=0.001,  # Default = 0.01
-    # rel_slope_threshold=0.001,  # Default = 0.01
-    cov_threshold=1e-2,  # Default = 0.01
-    rel_slope_threshold=1e-3,  # Default = 0.01
+    cov_threshold=1e-2,
+    rel_slope_threshold=1e-3,
     # batch_size=350,
     batch_size=2000,
     # epochs=360,
@@ -79,7 +61,7 @@ args = dict(
     bellows_normalization=False,
     use_shallow=False,
     minimum_penultimate_size=4,
-    shrinkage_factor=5,
+    shrinkage_factor=2,
     kaiming_weights=True,
 
     # Classifier model.
@@ -97,21 +79,41 @@ args = dict(
     _debug_run=False
 )
 
-today = datetime.today().strftime("%Y-%b-%d")
+methods = [
+    prepare_log2_expression,
+    # prepare_zscore_expression,
+    # prepare_npn_expression,
+    # prepare_qn_expression,
+    # prepare_qnz_expression,
+    # prepare_supermodel_expression,
+    # prepare_zupermodel_expression
+]
+
+prefilter_args = dict(
+    keep_minimum_survival=1,
+    keep_tech=None,
+    keep_event=None,
+    keep_minimum_censorship=30,
+    filter_duration=None,
+    filter_age=None
+    )
 
 iter_args = dict(
-    include_clinical_variables=[False],
+    include_clinical_variables=[True, False],
     use_shallow=[True, False],
-    qnorm_coxnet=[False],
+    leakyrelu=[0, 0.1]
     # rmst_max_time=[2038, 5*365, 7*365],
-    classification_threshold=[3*365, 2038, 7*365]
+    # classification_threshold=[3*365, 2038, 7*365]
     )
 
 iter_args = [dict(zip(iter_args.keys(), iter_vals)) for iter_vals in product(*iter_args.values())]
 
+today = datetime.today().strftime("%Y-%b-%d")
+save = False
+
 for run_args in iter_args:
-    print(run_args)
-    args["datasets"] = normalization_generator(methods, verbose=True)
+    print("Args:", run_args)
+    args["datasets"] = normalization_generator(methods, verbose=True, **prefilter_args)
     args.update(run_args)
 
     cv_results = cv_multiple(**args)
@@ -119,19 +121,21 @@ for run_args in iter_args:
     table = cv_results.tabulate(classify=True)
     aggregate = cv_results.make_agg_table(classify=True)
 
-    clinical = "with" if args["include_clinical_variables"] else "without"
-    l1_reg = "network_l1" if args["network_l1_reg"] else "coxnet"
-    depth = "shallow" if args["use_shallow"] else "deep"
-    rmst = "with" if args["use_rmst"] else "without"
-    qnorm = "with" if args["qnorm_coxnet"] else "without"
-    thresh = f"{args["classification_threshold"]/365:.1f}"
+    if save:
+        clinical = "with" if args["include_clinical_variables"] else "without"
+        l1_reg = args["feature_selector"]
+        depth = "shallow" if args["use_shallow"] else "deep"
+        rmst = "with" if args["use_rmst"] else "without"
+        qnorm = "with" if args["qnorm_coxnet"] else "without"
+        thresh = f"{args["classification_threshold"]/365:.1f}"
+        leaky = ".leaky" if args["leakyrelu"] > 0 else ""
 
-    outname = f"results_classify.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}_{qnorm}_qnorm"
-    outpath = f"./Data/{today}/{outname}/"
-    os.makedirs(outpath)
-    with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
-        pickle.dump(cv_results, outfile)
-    with open(f"{outpath}/{outname}.args", "w") as outfile:
-        outfile.write(str(args) + "\n")
-    table.to_csv(f"{outpath}/{outname}.tsv", sep="\t")
-    aggregate.to_csv(f"{outpath}/{outname}.agg.tsv", sep="\t")
+        outname = f"results_classify.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}_{qnorm}_qnorm{leaky}"
+        outpath = f"./Data/{today}/{outname}/"
+        os.makedirs(outpath)
+        with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
+            pickle.dump(cv_results, outfile)
+        with open(f"{outpath}/{outname}.args", "w") as outfile:
+            outfile.write(str(args) + "\n")
+        table.to_csv(f"{outpath}/{outname}.tsv", sep="\t")
+        aggregate.to_csv(f"{outpath}/{outname}.agg.tsv", sep="\t")
