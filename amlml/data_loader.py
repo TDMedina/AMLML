@@ -92,6 +92,7 @@ class NetworkDataset(Dataset):
         classes = self.classes[index] if self.classes is not None else None
         class_threshold = self.class_threshold if self.class_threshold is not None else None
         return NetworkDataset(*[x[index] for x in self.data],
+                              name=f"{self.name}.subset",
                               raw_ages=self.raw_ages.iloc[index],
                               z_expression=self.z_expression.iloc[index],
                               index=self.index[index],
@@ -104,6 +105,7 @@ class NetworkDataset(Dataset):
         classes = self.classes[indices] if self.classes is not None else None
         class_threshold = self.class_threshold if self.class_threshold is not None else None
         return NetworkDataset(*[x[indices] for x in self.data],
+                              name=f"{self.name}.subset",
                               raw_ages=self.raw_ages.iloc[indices],
                               z_expression=self.z_expression.iloc[indices],
                               index=self.index[indices],
@@ -173,6 +175,7 @@ class NetworkDataset(Dataset):
         data = NetworkDataset(expression=self.expression[..., genes],
                               durations=self.durations, events=self.events,
                               categoricals=self.categoricals, non_categoricals=self.non_categoricals,
+                              name=f"{self.name}.gene_subset",
                               raw_ages=self.raw_ages,
                               z_expression=self.z_expression.iloc[:, list(genes)],
                               index=self.index, tech=self.tech, genes=self.genes[list(genes)],
@@ -321,7 +324,7 @@ class NetworkDataset(Dataset):
     def filter_low_censorship_and_classify_by_duration(self, threshold=1460):
         classes = self.classify_by_duration(threshold)
         data = self[classes.index]
-        data.name = self.name + "_no_low_censor"
+        data.name = f"{self.name}.no_low_censor"
         data.classes = tensify(classes["groups"]).view([-1, 1])
         data.class_threshold = threshold
         return data
@@ -330,21 +333,21 @@ class NetworkDataset(Dataset):
         index = self.durations >= threshold
         index = np.where(index.cpu())[0]
         dataset = self[index]
-        dataset.name = self.name + "_duration_filtered"
+        dataset.name = f"{self.name}.duration_filtered"
         return dataset
 
     def filter_minimum_censorship(self, threshold):
         index = (self.events == 1) | (self.durations >= threshold)
         index = np.where(index.cpu())[0]
         dataset = self[index]
-        dataset.name = self.name + "_min_censor_filtered"
+        dataset.name = f"{self.name}.min_censor_filtered"
         return dataset
 
     def filter_by_event(self, event):
         index = self.events == event
         index = np.where(index.cpu())[0]
         dataset = self[index]
-        dataset.name = self.name + "_event_filtered"
+        dataset.name = f"{self.name}.event_filtered"
         return dataset
 
     def filter_by_age_at_diagnosis(self, age_in_days, keep_less_than=True):
@@ -354,13 +357,13 @@ class NetworkDataset(Dataset):
             index = self.raw_ages >= age_in_days
         index = np.where(index)[0]
         dataset = self[index]
-        dataset.name = self.name + "_age_filtered"
+        dataset.name = f"{self.name}.age_filtered"
         return dataset
 
     def filter_by_tech(self, tech):
         index = np.where(self.tech == tech)
         dataset = self[index]
-        dataset.name = self.name + "_tech_filtered"
+        dataset.name = f"{self.name}.tech_filtered"
         return dataset
 
     def filter_ambiguous(self, distance):
@@ -370,7 +373,7 @@ class NetworkDataset(Dataset):
                          | (self.rmst.durations > thresh+distance))
         index = np.where(non_ambiguous)
         dataset = self[index]
-        dataset.name = self.name + "_ambiguity_filtered"
+        dataset.name = f"{self.name}.ambiguity_filtered"
         dataset.rmst = self.rmst.loc[non_ambiguous]
         return dataset
 
@@ -674,14 +677,27 @@ def _prepare_outcomes(data, splits):
     return train, test
 
 
-def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expression,
-                 drop_zero_survivors=True, age_as_binary=True):
-    torch.set_grad_enabled(False)
-
-    if drop_zero_survivors:
-        data = data.loc[data.Outcomes["Overall Survival Time in Days"] > 0]
-
+def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression,
+                 age_as_binary=True, keep_minimum_survival=None, keep_tech=None, keep_event=None,
+                 keep_minimum_censorship=None, filter_duration: Callable = None,  filter_age: Callable = None):
     data.set_index("Tech", inplace=True, append=True)
+
+    duration = "Overall Survival Time in Days"
+    age = "Age at Diagnosis in Days"
+
+    if keep_minimum_survival is not None:
+        data = data.loc[data.Outcomes[duration] >= keep_minimum_survival]
+    if keep_tech is not None:
+        data = data.loc[idx[:, keep_tech],]
+    if keep_event is not None:
+        data = data.loc[data.Outcomes["Vital Status"] == keep_event]
+    if filter_duration is not None:
+        data = data.loc[filter_duration(data.Outcomes[duration])]
+    if keep_minimum_censorship is not None:
+        data = data.loc[(data.Outcomes[duration] >= keep_minimum_censorship)
+                        | (data.Outcomes["Vital Status"] == "Dead")]
+    if filter_age is not None:
+        data = data.loc[filter_age(data.Outcomes[age])]
 
     splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=0)
     splits = list(splitter.split(data, data.index.get_level_values("Tech")))[0]
@@ -691,8 +707,7 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
     train_exp, test_exp = _prepare_expression(data, normalization, splits)
     train_z_exp, test_z_exp = _prepare_expression(data, prepare_zscore_expression, splits, as_tensor=False)
     train_outcomes, test_outcomes = _prepare_outcomes(data, splits)
-    # print(train_outcomes, "===", test_outcomes)
-    age = "Age at Diagnosis in Days"
+
     train_age, test_age = data.Covariates[[age]].iloc[splits[0]], data.Covariates[[age]].iloc[splits[1]]
     train_dex, test_dex = data.iloc[splits[0]].index, data.iloc[splits[1]].index
     norm_name = normalization.__name__.split("_")[1]
@@ -702,14 +717,14 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
         categoricals=train_cat, non_categoricals=train_non_cat,
         raw_ages=train_age, z_expression=train_z_exp,
         index=train_dex, tech=train_dex.get_level_values("Tech"), genes=data.Expression.columns,
-        name=f"{norm_name.upper()}-train")
+        name=f"{norm_name.upper()}.train")
 
     test = NetworkDataset(
         expression=test_exp, durations=test_outcomes[0], events=test_outcomes[1],
         categoricals=test_cat, non_categoricals=test_non_cat,
         raw_ages=test_age, z_expression=test_z_exp,
         index=test_dex, tech=test_dex.get_level_values("Tech"), genes=data.Expression.columns,
-        name=f"{norm_name.upper()}-test")
+        name=f"{norm_name.upper()}.test")
 
     torch.set_grad_enabled(True)
     return train, test
@@ -841,14 +856,16 @@ def prepare_data2(data, cols, normalization: Callable = prepare_supermodel_expre
 #             set_ids, group_labels,
 #             expression_table)
 
-def main_loader(normalization: Callable, verbose=True, age_as_binary=True):
+def main_loader(normalization: Callable, verbose=True,
+                age_as_binary=True, keep_minimum_survival=None, keep_tech=None, keep_event=None,
+                keep_minimum_censorship=None, filter_duration: Callable = None,  filter_age: Callable = None):
     if verbose:
         print("Reading data...")
     data, cols = read_model_data_pickle()
     if verbose:
         print(f"Preparing method {normalization.__name__}")
-    train, test = prepare_data2(data, cols, normalization=normalization,
-                                age_as_binary=age_as_binary)
+    train, test = prepare_data(data, cols, normalization, age_as_binary, keep_minimum_survival, keep_tech, keep_event,
+                               keep_minimum_censorship, filter_duration, filter_age)
     return train, test
 
 #     prepared = prepare_data(*data[:4], normalization=normalization)
@@ -871,7 +888,9 @@ def main_loader(normalization: Callable, verbose=True, age_as_binary=True):
 #             expression_table)
 
 
-def normalization_generator(methods=None, verbose=False, age_as_binary=True):
+def normalization_generator(methods=None, verbose=False, age_as_binary=True, keep_minimum_survival=None,
+                            keep_tech=None, keep_event=None, keep_minimum_censorship=None,
+                            filter_duration: Callable = None,  filter_age: Callable = None):
     if methods is None:
         methods = [prepare_log2_expression, prepare_zscore_expression,
                    prepare_npn_expression, prepare_supermodel_expression,
@@ -887,7 +906,8 @@ def normalization_generator(methods=None, verbose=False, age_as_binary=True):
             network_type = CrossNormalizedModel
         if verbose:
             print(f"Preparing method {norm_method.__name__}")
-        train, test = prepare_data2(data, cols, norm_method, age_as_binary=age_as_binary)
+        train, test = prepare_data(data, cols, norm_method, age_as_binary, keep_minimum_survival, keep_tech,
+                                   keep_event, keep_minimum_censorship, filter_duration, filter_age)
         yield network_type, (train, test)
         # prepared = prepare_data(*data[:4], normalization=norm_method)
         # split = split_test_data(data[0], *prepared, *data[-2:])

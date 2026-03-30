@@ -1,17 +1,8 @@
-
-from datetime import datetime
-import os
-import pickle
-
-from amlml.evaluate_test import test_multiple
+from amlml.deprecated.evaluate_test import test_multiple
 from amlml.data_loader import (
     normalization_generator,
-    prepare_log2_expression,
-    prepare_zscore_expression,
-    prepare_npn_expression,
-    prepare_supermodel_expression,
-    prepare_zupermodel_expression
-    )
+    prepare_log2_expression
+)
 
 
 args = dict(
