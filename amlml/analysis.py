@@ -30,7 +30,7 @@ from amlml.parallel_modelling import CrossNormalizedModel, SuperModel
 from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import optimize_survival_splits, iterate_logrank_tests
 from amlml.data_loader import NetworkDataset, tensify
-from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
+from amlml.evaluation import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
                               TestResult, TestResultCollection,
                               classify_by_hazard_at_threshold)
 

@@ -6,7 +6,7 @@ import pickle
 
 import numpy as np
 
-from amlml.cross_norm_survival import cv_multiple
+from amlml.analysis import cv_multiple
 from amlml.data_loader import (
     normalization_generator,
     prepare_log2_expression,

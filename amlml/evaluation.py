@@ -228,7 +228,7 @@ class TestResult:
         return fig
 
     def roc(self):
-        data = (self.classes_test.Test, self.classes_test.Predicted)
+        data = (self.classes_test.Truth, self.classes_test.Predicted)
         roc = pd.DataFrame(dict(zip(["FPR", "TPR", "Threshold"], roc_curve(*data))))
         roc_auc = auc(roc.FPR, roc.TPR)
         youden = roc.iloc[np.argmax(roc.TPR - roc.FPR)]
@@ -236,7 +236,7 @@ class TestResult:
         return roc, roc_auc, youden, euclid
 
     def precision_recall(self):
-        data = (self.classes_test.Test, self.classes_test.Predicted)
+        data = (self.classes_test.Truth, self.classes_test.Predicted)
         pr = list(precision_recall_curve(*data))
         pr[-1] = np.append(pr[-1], 1)
         pr = pd.DataFrame(dict(zip(["Precision", "Recall", "Threshold"], pr)))
@@ -278,7 +278,7 @@ class TestResult:
                                             "<b>Precision:</b> %{y:.4f}<br>"
                                             "<extra></extra>")),
             row=1, col=2)
-        baseline = self.classes_test.Test.mean()
+        baseline = self.classes_test.Truth.mean()
         fig.add_hline(y=baseline, row=1, col=2, line_dash="dash", line_color="red",
                       showlegend=False)
         fig.update_xaxes(title_text="Recall", row=1, col=2)
@@ -300,14 +300,14 @@ class TestResult:
         return ranked
 
     def classification_report(self):
-        report = classification_report(self.classes_test.Test,
+        report = classification_report(self.classes_test.Truth,
                                        self.classes_test.Classification)
         return report
 
     def classification_accuracy(self):
-        accuracy = accuracy_score(self.classes_test.Test,
+        accuracy = accuracy_score(self.classes_test.Truth,
                                   self.classes_test.Classification)
-        macro = precision_recall_fscore_support(self.classes_test.Test,
+        macro = precision_recall_fscore_support(self.classes_test.Truth,
                                                 self.classes_test.Classification,
                                                 average="macro")
         return accuracy, macro

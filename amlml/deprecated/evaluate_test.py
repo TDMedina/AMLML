@@ -31,10 +31,10 @@ from amlml.lasso import test_lasso_penalties, get_non_zero_genes
 from amlml.km import optimize_survival_splits, iterate_logrank_tests
 from amlml.data_loader import NetworkDataset
 from amlml.cross_normalization import zscore_normalize_genes_by_group, zscore_normalize
-from amlml.coxph_eval import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
+from amlml.evaluation import (partial_log_likelihood, compute_baseline_hazards, predict_survival_table,
                               TestResult, TestResultCollection, classify_by_hazard_at_threshold)
-from amlml.cross_norm_survival import (generate_loss_function, generate_loss_convergence_test, ConvergeTest,
-                                       lr_cyclic_step_calculator, prefilter_dataset, preclassify_dataset)
+from amlml.analysis import (generate_loss_function, generate_loss_convergence_test, ConvergeTest,
+                            lr_cyclic_step_calculator, prefilter_dataset, preclassify_dataset)
 
 if torch.cuda.is_available():
     DEVICE = torch.device("cuda")

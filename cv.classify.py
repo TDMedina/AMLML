@@ -6,7 +6,7 @@ import pickle
 
 import numpy as np
 
-from amlml.cross_norm_survival import cv_multiple
+from amlml.analysis import cv_multiple
 from amlml.data_loader import (
     normalization_generator,
     prepare_log2_expression,
@@ -27,7 +27,7 @@ args = dict(
     # Regularization.
     feature_selector="coxnet",
 
-    coxnet_n_alphas=5,  # Note: Reset this.
+    coxnet_n_alphas=3,  # Note: Reset this.
     coxnet_alpha_min_ratio=1/16,  # Note: Reset this to 1/64.
     coxnet_alphas=None,
     qnorm_coxnet=False,  # Note: New.
@@ -36,7 +36,7 @@ args = dict(
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    cv_splits=5,
+    cv_splits=3,
 
     # Training.
     cov_threshold=1e-2,
@@ -99,9 +99,9 @@ prefilter_args = dict(
     )
 
 iter_args = dict(
-    include_clinical_variables=[True, False],
-    use_shallow=[True, False],
-    leakyrelu=[0, 0.1]
+    # include_clinical_variables=[True, False],
+    # use_shallow=[True, False],
+    # leakyrelu=[0, 0.1]
     # rmst_max_time=[2038, 5*365, 7*365],
     # classification_threshold=[3*365, 2038, 7*365]
     )
