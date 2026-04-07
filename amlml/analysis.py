@@ -259,8 +259,6 @@ def evaluate_hazards(network, metrics, train, test,
 
     network.eval()
     with torch.no_grad():
-        losses_train = [x.item() for x in losses_train]
-        losses_test = [x.item() for x in losses_test]
         first_weights = network.connected_layers.layers[0].weight.cpu().numpy()
 
         predictions_train = network(*train.network_args).cpu().numpy()
