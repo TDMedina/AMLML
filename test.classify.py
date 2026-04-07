@@ -98,7 +98,8 @@ iter_args = dict(
     use_shallow=[False, False],
     calibration_oof_path=[
         "/home/tyler/Documents/Projects/ML/Data/2026-Apr-01/results_classify.1.deep.without_clinical.with_rmst.coxnet_without_qnorm.leaky/oof_tables/LOG2.train.subset.ambiguity_filtered.gene_subset.alpha_0.oof_table.tsv",
-        "/home/tyler/Documents/Projects/ML/Data/2026-Apr-01/results_classify.1.deep.without_clinical.with_rmst.coxnet_without_qnorm.leaky/oof_tables/LOG2.train.subset.ambiguity_filtered.gene_subset.alpha_2.oof_table.tsv"]
+        "/home/tyler/Documents/Projects/ML/Data/2026-Apr-01/results_classify.1.deep.without_clinical.with_rmst.coxnet_without_qnorm.leaky/oof_tables/LOG2.train.subset.ambiguity_filtered.gene_subset.alpha_2.oof_table.tsv"
+        ]
     )
 
 iter_args = [dict(zip(iter_args.keys(), iter_vals)) for iter_vals in zip(*iter_args.values())]
