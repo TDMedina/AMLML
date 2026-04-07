@@ -6,7 +6,7 @@ import pickle
 
 import numpy as np
 
-from amlml.analysis import cv_multiple
+from amlml.analysis import run_multiple
 from amlml.data_loader import (
     normalization_generator,
     prepare_log2_expression,
@@ -15,6 +15,7 @@ from amlml.data_loader import (
     prepare_qnz_expression,
     prepare_npn_expression,
     prepare_supermodel_expression,
+    prepare_superlogger_expression,
     prepare_zupermodel_expression
     )
 
@@ -27,7 +28,7 @@ args = dict(
     # Regularization.
     feature_selector="coxnet",
 
-    coxnet_n_alphas=5,  # Note: Reset this.
+    coxnet_n_alphas=1,  # Note: Reset this.
     coxnet_alpha_min_ratio=1/32,  # Note: Reset this to 1/64.
     coxnet_alphas=None,
     qnorm_coxnet=False,  # Note: New.
@@ -36,7 +37,7 @@ args = dict(
     network_weight_decay=1e-4,
 
     # Cross-Validation.
-    cv_splits=5,
+    cv_splits=1,
 
     # Training.
     cov_threshold=0.00105,
@@ -80,12 +81,13 @@ args = dict(
 )
 
 methods = [
-    prepare_log2_expression,
+    # prepare_log2_expression,
     # prepare_zscore_expression,
     # prepare_npn_expression,
     # prepare_qn_expression,
     # prepare_qnz_expression,
     # prepare_supermodel_expression,
+    prepare_superlogger_expression,
     # prepare_zupermodel_expression
 ]
 
@@ -116,7 +118,7 @@ for run_args in iter_args:
     args["datasets"] = normalization_generator(methods, verbose=True, **prefilter_args)
     args.update(run_args)
 
-    cv_results = cv_multiple(**args)
+    cv_results = run_multiple(**args)
     cv_results.parameters = str(args)
     table = cv_results.tabulate()
     aggregate = cv_results.make_agg_table()

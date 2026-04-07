@@ -1,6 +1,5 @@
 
-from collections import defaultdict
-from itertools import product
+from itertools import product, groupby
 from typing import Literal
 
 import plotly.graph_objects as go
@@ -10,6 +9,8 @@ import pandas as pd
 from sklearn.metrics import (precision_recall_fscore_support, classification_report,
                              accuracy_score, roc_curve, precision_recall_curve,
                              auc, average_precision_score)
+from sklearn.calibration import calibration_curve
+from sklearn.linear_model import LogisticRegression
 
 
 def partial_log_likelihood(outcome_table, predictions, eps=1e-7):
@@ -73,6 +74,14 @@ def classify_by_hazard_at_threshold(survival, threshold):
 #     return - log_h.sub(log_cumsum_h).mul(events).sum().div(events.sum())
 
 
+def calibrate_predictions(train_classes, test_classes):
+    smoosh = lambda x: x.to_numpy().reshape(-1, 1)
+    calibrator = LogisticRegression(C=1e5)  # High C for minimal regularization
+    calibrator.fit(smoosh(train_classes.Raw), train_classes.Truth)
+    calibrated = calibrator.predict_proba(smoosh(test_classes.Raw))[:, -1]
+    return calibrated, calibrator
+
+
 class TestResult:
     def __init__(self, fold, alpha, alpha_index, genes,
                  n_epochs, lrs, losses_train, losses_test,
@@ -83,7 +92,9 @@ class TestResult:
                  survival_train=None, survival_test=None, first_weights=None,
                  classes_train=None, classes_test=None,
                  classify_loss_train=None, classify_loss_test=None,
-                 parameters=None, name=None, km_table_train=None, km_table_test=None):
+                 parameters=None, name=None, km_table_train=None, km_table_test=None,
+                 classifier=None, norm_method=None, clinical=None, leaky=None,
+                 l1_method=None, shallow=None, rmst=None, qnorm=None, threshold=None):
         self.fold = fold
         self.alpha = alpha
         self.alpha_index = alpha_index
@@ -122,6 +133,28 @@ class TestResult:
         self.parameters = parameters
 
         self.name = name
+        # self.classifier = classifier
+        # self.norm_method = norm_method
+        # self.clinical = clinical
+        # self.leaky = leaky
+        # self.l1_method = l1_method
+        # self.shallow = shallow
+        # self.rmst = rmst
+        # self.qnorm = qnorm
+        # self.threshold = threshold
+
+    # def build_path_name(self):
+    #     network_type = "classify" if self.classifier else "hazard"
+    #     clinical = "with" if self.clinical else "without"
+    #     l1_method = self.l1_method
+    #     depth = "shallow" if self.shallow else "deep"
+    #     rmst = "with" if self.rmst else "without"
+    #     qnorm = "with" if self.qnorm else "without"
+    #     thresh = f"{self.threshold/365:.1f}"
+    #     leaky = "leaky_relu" if self.leaky else "relu"
+    #     outname = (f"results_{network_type}.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst"
+    #                f".{l1_method}_{qnorm}_qnorm.{leaky}")
+    #     return outname
 
     def tabulate(self, include_name=True, classify=False):
         flatten = lambda thing: (thing if (thing is None or len(thing) > 1) else thing[0])
@@ -172,7 +205,8 @@ class TestResult:
         table.columns = pd.MultiIndex.from_tuples(table.columns)
         if classify:
             table = table[["model", "classify"]]
-            table.drop([("classify", "loss_train"), ("classify", "loss_test")], axis=1)
+            table = table.drop([("classify", "loss_train"), ("classify", "loss_test")],
+                               axis=1)
         return table
 
     def plot_loss(self, _as_subplot=False):
@@ -215,37 +249,44 @@ class TestResult:
         return table
 
     def plot_predictions(self):
-        fig = make_subplots(1, 2)
-        for i, (name, data) in enumerate(zip(["Train", "Test"],
-                                         [self.classes_train, self.classes_test]),
-                                         start=1):
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted < 0.5, name],
-                                     y=data.loc[data.Predicted < 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i, row=1)
-            fig.add_trace(go.Scatter(x=data.loc[data.Predicted >= 0.5, name],
-                                     y=data.loc[data.Predicted >= 0.5, "Predicted"],
-                                     mode="markers", name=name), col=i, row=1)
+        names = ["Train", "Test"]
+        fig = make_subplots(rows=1, cols=2, subplot_titles=names)
+        for i, (name, data) in enumerate(zip(names, [self.classes_train, self.classes_test]), start=1):
+            fig.add_trace(go.Scatter(x=data.Truth, y=data.Predicted,
+                                     marker_color=data.Event, mode="markers"),
+                          row=1, col=i)
         return fig
 
-    def roc(self):
-        data = (self.classes_test.Truth, self.classes_test.Predicted)
+    def plot_calibration_curve(self, calibrated=False):
+        predicted = "Calibrated" if calibrated else "Predicted"
+        caltrue, calpred = calibration_curve(self.classes_test.Truth,
+                                             self.classes_test[predicted], n_bins=10)
+        fig = go.Figure(go.Scatter(x=calpred, y=caltrue, mode="lines"))
+        fig.add_trace(go.Scatter(x=[0, 1], y=[0, 1], mode="lines",
+                                 line_dash="dash", line_color="red"))
+        return fig
+
+    def roc(self, calibrated=False):
+        predicted = "Calibrated" if calibrated else "Predicted"
+        data = (self.classes_test.Truth, self.classes_test[predicted])
         roc = pd.DataFrame(dict(zip(["FPR", "TPR", "Threshold"], roc_curve(*data))))
         roc_auc = auc(roc.FPR, roc.TPR)
         youden = roc.iloc[np.argmax(roc.TPR - roc.FPR)]
         euclid = roc.iloc[np.argmin(np.sqrt(roc.FPR ** 2 + (roc.TPR - 1) ** 2))]
         return roc, roc_auc, youden, euclid
 
-    def precision_recall(self):
-        data = (self.classes_test.Truth, self.classes_test.Predicted)
+    def precision_recall(self, calibrated=False):
+        predicted = "Calibrated" if calibrated else "Predicted"
+        data = (self.classes_test.Truth, self.classes_test[predicted])
         pr = list(precision_recall_curve(*data))
         pr[-1] = np.append(pr[-1], 1)
         pr = pd.DataFrame(dict(zip(["Precision", "Recall", "Threshold"], pr)))
         pr_auc = average_precision_score(*data)
         return pr, pr_auc
 
-    def plot_roc_and_pr_curve(self):
-        roc, roc_auc, youden, euclid = self.roc()
-        pr, pr_auc = self.precision_recall()
+    def plot_roc_and_pr_curve(self, calibrated=False):
+        roc, roc_auc, youden, euclid = self.roc(calibrated=calibrated)
+        pr, pr_auc = self.precision_recall(calibrated=calibrated)
 
         fig = make_subplots(rows=1, cols=2, subplot_titles=["ROC Curve", "PR Curve"])
         fig.add_trace(
@@ -319,6 +360,13 @@ class TestResultCollection:
         self.methods = methods
         self.folds_per = folds_per
 
+    def group_by_model(self):
+        key = lambda x: (x.name, x.alpha_index)
+        results = sorted(self.results, key=key)
+        results = {id_: TestResultCollection(list(group))
+                   for id_, group in groupby(results, key=key)}
+        return results
+
     def tabulate(self, classify=False):
         tables = [x.tabulate(classify=classify) for x in self.results]
         table = pd.concat(tables, axis=0)
@@ -335,6 +383,12 @@ class TestResultCollection:
         table = self.tabulate(classify=classify).drop(drop, axis=1)
         table = table.groupby(["name", "alpha_index"]).mean()
         return table
+
+    def make_oof_class_tables(self):
+        models = self.group_by_model()
+        model_tables = {id_: pd.concat([result.classes_test for result in model.results])
+                        for id_, model in models.items()}
+        return model_tables
 
     def _plot(self, plot_fn):
         rows = len(self.methods)

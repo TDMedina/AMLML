@@ -6,11 +6,7 @@ from typing import Callable, Literal
 
 import numpy as np
 from numpy.polynomial import Polynomial
-from qnorm import quantile_normalize
 import pandas as pd
-from pandas import IndexSlice as idx
-import plotly.graph_objects as go
-import plotly.express as px
 from scipy.stats import variation
 from scipy.integrate import simpson
 from sklearn.model_selection import StratifiedKFold, StratifiedShuffleSplit
@@ -181,20 +177,20 @@ def train_network(network, optimizer, lr_scheduler, loss_fn, train, test,
             optimizer.zero_grad()
             predictions_train = network(*batch.network_args)
             loss = loss_fn(predictions_train, batch)
-            epoch_loss += loss * len(batch)
+            epoch_loss += loss.item() * len(batch)
             if network_l1_alpha is not None:
                 loss = loss + network_l1_alpha * network.connected_layers.layers[0].weight.abs().sum()
             loss.backward()
             torch.nn.utils.clip_grad_norm_(network.parameters(), max_norm=5.0)
             optimizer.step()
             lr_scheduler.step()
-        epoch_loss = (epoch_loss / len(train))
+        epoch_loss = (epoch_loss / len(train)).item()
         losses_train.append(epoch_loss)
 
         with torch.no_grad():
             # Calculate test loss.
             predictions_test = network(*test.network_args)
-            loss_test = loss_fn(predictions_test, test)
+            loss_test = loss_fn(predictions_test, test).item()
             losses_test.append(loss_test)
 
             # Track epoch loss and check loss convergence.
@@ -202,7 +198,7 @@ def train_network(network, optimizer, lr_scheduler, loss_fn, train, test,
                 progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss:": f"{losses_test[-1]:.3f}",
                                       "Var": "--", "Slope": "--"})
                 continue
-            converge_check = convergence_test(torch.stack(losses_train[-len_loss_convergence:]).cpu().numpy())
+            converge_check = convergence_test(losses_train[-len_loss_convergence:])
             progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss": f"{losses_test[-1]:.3f}",
                                   "Var": f"{converge_check.score[0]:.4f}", "Slope": f"{converge_check.score[1]:.4f}"})
             if (converge_check.passed and epoch >= min_epochs
@@ -225,12 +221,17 @@ def evaluate_classifier(network, metrics, train, test,
 
         classes = []
         for dataset in [train, test]:
+            logits = network(*dataset.network_args)
+            sigmoided = sigmoid(logits)
             class_table = pd.DataFrame(zip(dataset.events.squeeze().tolist(),
                                            dataset.classes.squeeze().tolist(),
-                                           sigmoid(network(*dataset.network_args)).squeeze().tolist()),
-                                       columns=["Event", "Truth", "Predicted"])
+                                           # sigmoid(network(*dataset.network_args)).squeeze().tolist()),
+                                           logits.squeeze().tolist(),
+                                           sigmoided.squeeze().tolist()),
+                                       columns=["Event", "Truth", "Raw", "Predicted"])
             class_table["Classification"] = (class_table.Predicted >= 0.5).astype(int)
             classes.append(class_table)
+        # calibrate_predictions(*classes)
 
         result = TestResult(
             fold=fold,
@@ -279,11 +280,10 @@ def evaluate_hazards(network, metrics, train, test,
         survival_test = predict_survival_table(predictions_test, baseline_hazards.cumulative)
 
         # Evaluate classification by hazard.
-        classes = [(None, None), (None, None)]
         if hazard_classify:
             print("    Calculating hazard classes...")
             bce_loss = BCELoss()
-            classes = []
+            class_tables, class_losses = [], []
             for surv, dataset in [(survival_train, train), (survival_test, test)]:
                 class_table = classify_by_hazard_at_threshold(surv, dataset.class_threshold)
                 class_loss = bce_loss(tensify(class_table).view(-1, 1), dataset.classes).item()
@@ -291,7 +291,10 @@ def evaluate_hazards(network, metrics, train, test,
                                                class_table),
                                                columns=["Truth", "Predicted"])
                 class_table["Classification"] = (class_table.Predicted >= 0.5).astype(int)
-                classes.append((class_table, class_loss))
+                class_tables.append(class_table)
+                class_losses.append(class_loss)
+        else:
+            class_tables, class_losses = [None, None], [None, None]
 
         print("    Calculating concordance...")
         ev = EvalSurv(survival_test, test.durations.cpu().numpy(), test.events.cpu().numpy(), censor_surv="km")
@@ -303,12 +306,14 @@ def evaluate_hazards(network, metrics, train, test,
         ctd = ev.concordance_td()
 
         print("    Calculating survival split...")
+        # Train survival split.
         km_df = train.outcome_target_table
         km_df = km_df.assign(risk=predictions_train)
         optimal_splits = optimize_survival_splits(km_df, n_groups=survival_splits, method="Brute")
         risk_splits_q = np.cumulative_sum(optimal_splits)
         risk_splits = [km_df["risk"].quantile(x) for x in risk_splits_q]
 
+        # Test survival split.
         km_val_df = test.outcome_target_table
         km_val_df["risk"] = predictions_test
         groups = ascii_uppercase[:len(risk_splits) + 1]
@@ -341,10 +346,10 @@ def evaluate_hazards(network, metrics, train, test,
             logranks=logranks,
             survival_train=survival_train,
             survival_test=survival_test,
-            classes_train=classes[0][0],
-            classify_loss_train=classes[0][1],
-            classes_test=classes[1][0],
-            classify_loss_test=classes[1][1],
+            classes_train=class_tables[0],
+            classes_test=class_tables[1],
+            classify_loss_train=class_losses[0],
+            classify_loss_test=class_losses[1],
             first_weights=first_weights,
             km_table_train=km_df,
             km_table_test=km_val_df
@@ -447,6 +452,9 @@ def cross_validation_run(#dataset: NetworkDataset,
                 result = evaluate_hazards(network, metrics, train_alpha, test_alpha,
                                           i, alpha, j, genes,
                                           skip_diverged, hazard_classify, survival_splits, save_network)
+            del network
+            del optimizer
+            del lr_scheduler
             results.append(result)
 
     results = TestResultCollection(results, None, cv_splits)
@@ -753,12 +761,17 @@ def cross_validation_run(#dataset: NetworkDataset,
     return results
 
 
-def cv_multiple(datasets: list[tuple[Callable, NetworkDataset]], **kwargs):
+def run_multiple(datasets: list[tuple[Callable, NetworkDataset]], cv=True, **kwargs):
     results = []
     names = []
-    for network_type, (train, _) in datasets:
+    for network_type, (train, test) in datasets:
+        if cv:
+            test = None
+        else:
+            kwargs["cv_splits"] = 1
         names.append(train.name)
-        sub_results = cross_validation_run(train=train, network_type=network_type,
+        sub_results = cross_validation_run(train=train, test=test,
+                                           network_type=network_type,
                                            **kwargs)
         results.extend(sub_results.results)
     print("Collating results...")

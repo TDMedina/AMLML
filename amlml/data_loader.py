@@ -508,6 +508,7 @@ def read_model_data():
 def read_model_data_pickle():
     with open("Data/big_pickle.pickle", "rb") as infile:
         data, cols = pickle.load(infile)
+    data.set_index("Tech", inplace=True, append=True)
     return data, cols
 
 
@@ -579,9 +580,12 @@ def prepare_npn_expression(data, splits, as_tensor=True):
 #     return expression
 
 
-def prepare_supermodel_expression(data, splits, with_zscore=False, as_tensor=True):
-    if with_zscore:
-        train, test = prepare_zscore_expression(data, splits, as_tensor=False)
+def prepare_supermodel_expression(data, splits, with_log=False,
+                                  with_zscore=False, as_tensor=True):
+    if with_log:
+        train, test = prepare_log2_expression(data, as_tensor=False, splits=splits)
+    elif with_zscore:
+        train, test = prepare_zscore_expression(data, as_tensor=False, splits=splits)
     else:
         train, test = data.iloc[splits[0]], data.iloc[splits[1]]
 
@@ -597,6 +601,10 @@ def prepare_supermodel_expression(data, splits, with_zscore=False, as_tensor=Tru
     if as_tensor:
         train, test = tensify(train), tensify(test)
     return train, test
+
+
+def prepare_superlogger_expression(data, splits, as_tensor=True,):
+    return prepare_supermodel_expression(data, splits, with_log=True, as_tensor=as_tensor)
 
 
 def prepare_zupermodel_expression(data, splits, as_tensor=True,):
@@ -680,8 +688,6 @@ def _prepare_outcomes(data, splits):
 def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression,
                  age_as_binary=True, keep_minimum_survival=None, keep_tech=None, keep_event=None,
                  keep_minimum_censorship=None, filter_duration: Callable = None,  filter_age: Callable = None):
-    data.set_index("Tech", inplace=True, append=True)
-
     duration = "Overall Survival Time in Days"
     age = "Age at Diagnosis in Days"
 
@@ -899,8 +905,7 @@ def normalization_generator(methods=None, verbose=False, age_as_binary=True, kee
         print("Reading data...")
     data, cols = read_model_data_pickle()
     for norm_method in methods:
-        if (norm_method == prepare_supermodel_expression
-                or norm_method == prepare_zupermodel_expression):
+        if norm_method in [prepare_supermodel_expression, prepare_superlogger_expression, prepare_zupermodel_expression]:
             network_type = SuperModel
         else:
             network_type = CrossNormalizedModel
