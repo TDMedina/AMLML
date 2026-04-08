@@ -195,7 +195,7 @@ def train_network(network, optimizer, lr_scheduler, loss_fn, train, test,
 
             # Track epoch loss and check loss convergence.
             if len(losses_train) < len_loss_convergence:
-                progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss:": f"{losses_test[-1]:.3f}",
+                progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss": f"{losses_test[-1]:.3f}",
                                       "Var": "--", "Slope": "--"})
                 continue
             converge_check = convergence_test(losses_train[-len_loss_convergence:])
@@ -358,7 +358,8 @@ def cross_validation_run(#dataset: NetworkDataset,
                          train: NetworkDataset, test: NetworkDataset = None,
                          network_type: Callable = CrossNormalizedModel,
                          cv_splits=5,
-                         include_clinical_variables=True, covariate_cardinality=None,
+                         include_clinical_variables=True, include_categoricals=True,
+                         covariate_cardinality=None,
                          feature_selector: Literal["coxnet", "network_l1", None] = "coxnet",
                          coxnet_l1_ratio=1, coxnet_alpha_min_ratio=0.01, coxnet_n_alphas=20, coxnet_alphas=None, qnorm_coxnet=False,
                          network_l1_alphas=None, network_weight_decay=1e-4,
@@ -395,7 +396,7 @@ def cross_validation_run(#dataset: NetworkDataset,
                  "network_l1_alphas": network_l1_alphas}
     network_params = {"shrinkage_factor": shrinkage_factor, "minimum_penultimate_size": minimum_penultimate_size, "final_size": 1,
                       "include_clinical_variables": include_clinical_variables, "n_clinical": train.n_clinical,
-                      "covariate_cardinality": covariate_cardinality,
+                      "include_categoricals": include_categoricals, "covariate_cardinality": covariate_cardinality,
                       "embedding_dims": {"race": 3, "ethnicity": 3, "interaction": 3, "protocol": 3},
                       "zero_params": zero_params, "kaiming_weights": kaiming_weights, "output_xavier": classify,
                       "use_shallow": use_shallow, "dropout": dropout, "leakyrelu": leakyrelu}

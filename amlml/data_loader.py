@@ -58,7 +58,8 @@ class NetworkDataset(Dataset):
                  raw_ages, z_expression,
                  index, tech, genes, name=None,
                  classes=None, class_threshold=None,
-                 rmst=False, max_time=None, tukey_factor=3):
+                 rmst=False, max_time=None, tukey_factor=3,
+                 cat_map=None, cat_varnames=None, noncat_varnames=None):
         self.expression = expression
         self.durations = durations
         self.events = events
@@ -68,6 +69,9 @@ class NetworkDataset(Dataset):
         self.index = index
         self.tech = tech
         self.genes = genes
+        self.cat_map = cat_map
+        self.cat_varnames = cat_varnames
+        self.noncat_varnames = noncat_varnames
 
         self.raw_ages = raw_ages
         self.z_expression = z_expression
@@ -99,7 +103,10 @@ class NetworkDataset(Dataset):
                               tech=self.tech[index],
                               classes=classes,
                               class_threshold=class_threshold,
-                              genes=self.genes)
+                              genes=self.genes,
+                              cat_map=self.cat_map,
+                              cat_varnames=self.cat_varnames,
+                              noncat_varnames=self.noncat_varnames)
 
     def __getitems__(self, indices):
         classes = self.classes[indices] if self.classes is not None else None
@@ -112,7 +119,10 @@ class NetworkDataset(Dataset):
                               tech=self.tech[indices],
                               classes=classes,
                               class_threshold=class_threshold,
-                              genes=self.genes)
+                              genes=self.genes,
+                              cat_map=self.cat_map,
+                              cat_varnames=self.cat_varnames,
+                              noncat_varnames=self.noncat_varnames)
 
     @property
     def data(self):
@@ -168,6 +178,12 @@ class NetworkDataset(Dataset):
         return all_vars
 
     @property
+    def clinical_variables(self):
+        clinicals = torch.concat([self.categoricals, self.non_categoricals[:, 0, :]],
+                                 dim=-1)
+        return clinicals
+
+    @property
     def network_args(self):
         return self.expression, self.categoricals, self.non_categoricals
 
@@ -179,7 +195,9 @@ class NetworkDataset(Dataset):
                               raw_ages=self.raw_ages,
                               z_expression=self.z_expression.iloc[:, list(genes)],
                               index=self.index, tech=self.tech, genes=self.genes[list(genes)],
-                              classes=self.classes, class_threshold=self.class_threshold)
+                              classes=self.classes, class_threshold=self.class_threshold,
+                              cat_map=self.cat_map, cat_varnames=self.cat_varnames,
+                              noncat_varnames=self.noncat_varnames)
         return data
 
     def generate_batches(self, batch_size, shuffle_=True):
@@ -617,22 +635,28 @@ def _prepare_expression(data, normalization, splits, **kwargs):
 
 
 def _prepare_categorical(data, cols, splits):
-    categoricals = [x for x in data.Covariates if cols["Covariates"][x] == "categorical"]
-    categoricals = data.Covariates[categoricals]
+    names = [x for x in data.Covariates if cols["Covariates"][x] == "categorical"]
+    categoricals = data.Covariates[names]
+    category_map = dict()
     for x in categoricals:
         categoricals[x] = pd.Categorical(categoricals[x])
+        category_map[x] = dict(enumerate(categoricals[x].cat.categories))
         categoricals[x] = categoricals[x].cat.codes
     categoricals = categoricals.to_numpy()
     train, test = categoricals[splits[0]], categoricals[splits[1]]
     train, test = tensor(train, dtype=torch.int32, device=DEVICE), tensor(test, dtype=torch.int32, device=DEVICE)
-    return train, test
+    return train, test, names, category_map
 
 
 def _prepare_non_categorical(data, cols, splits, age_as_binary=True, binary_fill="mode"):
-    continuous = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "continuous"]]
-    binary = data.Covariates[[x for x in data.Covariates if cols["Covariates"][x] == "binary"]]
+    cont_names = [x for x in data.Covariates if cols["Covariates"][x] == "continuous"]
+    bin_names = [x for x in data.Covariates if cols["Covariates"][x] == "binary"]
+    continuous = data.Covariates[cont_names]
+    binary = data.Covariates[bin_names]
+
     if age_as_binary:
-        binary["is_adult"] = (data.Covariates["Age at Diagnosis in Days"] < 18*365).astype(int)
+        binary["is_child"] = (data.Covariates["Age at Diagnosis in Days"] < 18*365).astype(int)
+        bin_names.append("is_child")
     cont_mask, bin_mask = pd.isna(continuous).astype(int), pd.isna(binary).astype(int)
 
     continuous_train, continuous_test = continuous.iloc[splits[0]], continuous.iloc[splits[1]]
@@ -670,7 +694,7 @@ def _prepare_non_categorical(data, cols, splits, age_as_binary=True, binary_fill
     # non_cat = [tensor(add_nan_mask_stack(dataset, impute_value=imputation), dtype=float32, device=DEVICE).permute(1, 0, 2)
     #            for dataset in [train, test]]
     # train, test = non_cat
-    return train, test
+    return train, test, cont_names+bin_names
 
 
 def _prepare_outcomes(data, splits):
@@ -687,7 +711,9 @@ def _prepare_outcomes(data, splits):
 
 def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expression,
                  age_as_binary=True, keep_minimum_survival=None, keep_tech=None, keep_event=None,
-                 keep_minimum_censorship=None, filter_duration: Callable = None,  filter_age: Callable = None):
+                 keep_minimum_censorship=None, keep_clinical_variables=None,
+                 filter_duration: Callable = None,
+                 filter_age: Callable = None):
     duration = "Overall Survival Time in Days"
     age = "Age at Diagnosis in Days"
 
@@ -697,6 +723,9 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
         data = data.loc[idx[:, keep_tech],]
     if keep_event is not None:
         data = data.loc[data.Outcomes["Vital Status"] == keep_event]
+    if keep_clinical_variables is not None:
+        droppers = list(set(data.Covariates.columns) - set(keep_clinical_variables))
+        data = data.drop([("Covariates", x) for x in droppers], axis=1)
     if filter_duration is not None:
         data = data.loc[filter_duration(data.Outcomes[duration])]
     if keep_minimum_censorship is not None:
@@ -708,8 +737,8 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
     splitter = StratifiedShuffleSplit(n_splits=1, test_size=0.2, random_state=0)
     splits = list(splitter.split(data, data.index.get_level_values("Tech")))[0]
 
-    train_cat, test_cat = _prepare_categorical(data, cols, splits)
-    train_non_cat, test_non_cat = _prepare_non_categorical(data, cols, splits, age_as_binary)
+    train_cat, test_cat, cat_names, cat_map = _prepare_categorical(data, cols, splits)
+    train_non_cat, test_non_cat, noncat_names = _prepare_non_categorical(data, cols, splits, age_as_binary)
     train_exp, test_exp = _prepare_expression(data, normalization, splits)
     train_z_exp, test_z_exp = _prepare_expression(data, prepare_zscore_expression, splits, as_tensor=False)
     train_outcomes, test_outcomes = _prepare_outcomes(data, splits)
@@ -723,14 +752,16 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
         categoricals=train_cat, non_categoricals=train_non_cat,
         raw_ages=train_age, z_expression=train_z_exp,
         index=train_dex, tech=train_dex.get_level_values("Tech"), genes=data.Expression.columns,
-        name=f"{norm_name.upper()}.train")
+        name=f"{norm_name.upper()}.train", cat_map=cat_map, cat_varnames=cat_names,
+        noncat_varnames=noncat_names)
 
     test = NetworkDataset(
         expression=test_exp, durations=test_outcomes[0], events=test_outcomes[1],
         categoricals=test_cat, non_categoricals=test_non_cat,
         raw_ages=test_age, z_expression=test_z_exp,
         index=test_dex, tech=test_dex.get_level_values("Tech"), genes=data.Expression.columns,
-        name=f"{norm_name.upper()}.test")
+        name=f"{norm_name.upper()}.test", cat_map=cat_map, cat_varnames=cat_names,
+        noncat_varnames=noncat_names)
 
     torch.set_grad_enabled(True)
     return train, test
@@ -864,14 +895,16 @@ def prepare_data(data, cols, normalization: Callable = prepare_supermodel_expres
 
 def main_loader(normalization: Callable, verbose=True,
                 age_as_binary=True, keep_minimum_survival=None, keep_tech=None, keep_event=None,
-                keep_minimum_censorship=None, filter_duration: Callable = None,  filter_age: Callable = None):
+                keep_minimum_censorship=None, keep_clinical_variables=None,
+                filter_duration: Callable = None,  filter_age: Callable = None):
     if verbose:
         print("Reading data...")
     data, cols = read_model_data_pickle()
     if verbose:
         print(f"Preparing method {normalization.__name__}")
     train, test = prepare_data(data, cols, normalization, age_as_binary, keep_minimum_survival, keep_tech, keep_event,
-                               keep_minimum_censorship, filter_duration, filter_age)
+                               keep_minimum_censorship, keep_clinical_variables,
+                               filter_duration, filter_age)
     return train, test
 
 #     prepared = prepare_data(*data[:4], normalization=normalization)
@@ -896,6 +929,7 @@ def main_loader(normalization: Callable, verbose=True,
 
 def normalization_generator(methods=None, verbose=False, age_as_binary=True, keep_minimum_survival=None,
                             keep_tech=None, keep_event=None, keep_minimum_censorship=None,
+                            keep_clinical_variables=None,
                             filter_duration: Callable = None,  filter_age: Callable = None):
     if methods is None:
         methods = [prepare_log2_expression, prepare_zscore_expression,
@@ -912,7 +946,8 @@ def normalization_generator(methods=None, verbose=False, age_as_binary=True, kee
         if verbose:
             print(f"Preparing method {norm_method.__name__}")
         train, test = prepare_data(data, cols, norm_method, age_as_binary, keep_minimum_survival, keep_tech,
-                                   keep_event, keep_minimum_censorship, filter_duration, filter_age)
+                                   keep_event, keep_minimum_censorship, keep_clinical_variables,
+                                   filter_duration, filter_age)
         yield network_type, (train, test)
         # prepared = prepare_data(*data[:4], normalization=norm_method)
         # split = split_test_data(data[0], *prepared, *data[-2:])

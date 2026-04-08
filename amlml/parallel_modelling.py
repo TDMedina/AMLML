@@ -225,11 +225,15 @@ class ClinicalMissingMask(nn.Module):
 
 class ClinicalModel(nn.Module):
     def __init__(self, covariate_cardinality: dict, embedding_dims: dict,
-                 n_non_categorical: int, leakyrelu=0):
+                 n_non_categorical: int, leakyrelu=0, include_categoricals=True):
         super().__init__()
-        self.ethnicity = EthnicityModel(covariate_cardinality, embedding_dims)
-        self.protocol = ProtocolModel(covariate_cardinality["protocol"],
-                                      embedding_dims["protocol"])
+        if include_categoricals:
+            self.ethnicity = EthnicityModel(covariate_cardinality, embedding_dims)
+            self.protocol = ProtocolModel(covariate_cardinality["protocol"],
+                                          embedding_dims["protocol"])
+        else:
+            self.ethnicity = self.clinical_dummy
+            self.protocol = self.clinical_dummy
         self.non_categorical = ClinicalMissingMask(n_non_categorical, leakyrelu=leakyrelu)
 
     def forward(self, categorical, non_categorical):
@@ -239,11 +243,16 @@ class ClinicalModel(nn.Module):
         x = torch.cat([ethnicity, protocol, non_categorical], dim=1)
         return x
 
+    @staticmethod
+    def clinical_dummy(*args, **kwargs):
+        return torch.tensor([], device=DEVICE)
+
 
 class SuperModel(nn.Module):
     def __init__(self, n_genes: int, n_tech: int, n_expansion: int,
                  shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
-                 include_clinical_variables=True, n_clinical: int = None,
+                 include_clinical_variables=True, include_categoricals=True,
+                 n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
                  zero_params=False, kaiming_weights=False, output_xavier=False,
                  bellows_normalization=True, use_shallow=False, dropout=0.2, leakyrelu=0):
@@ -252,9 +261,12 @@ class SuperModel(nn.Module):
         dnn_input_dim = n_genes
 
         if self.includes_clinical:
-            dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
+            dnn_input_dim += n_clinical-3
+            if include_categoricals:
+                dnn_input_dim += sum(embedding_dims.values())
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
-                                                n_clinical-3, leakyrelu=leakyrelu)
+                                                n_clinical-3, leakyrelu=leakyrelu,
+                                                include_categoricals=include_categoricals)
         else:
             self.clinical_model = self.clinical_dummy
 
@@ -297,7 +309,8 @@ class SuperModel(nn.Module):
 class CrossNormalizedModel(nn.Module):
     def __init__(self, n_genes: int,
                  shrinkage_factor: int, minimum_penultimate_size: int, final_size: int,
-                 include_clinical_variables=True, n_clinical: int = None,
+                 include_clinical_variables=True, include_categoricals=True,
+                 n_clinical: int = None,
                  covariate_cardinality: dict = None, embedding_dims: dict = None,
                  zero_params=False, kaiming_weights=False, output_xavier=False, use_shallow=False,
                  dropout=0.2, leakyrelu=0):
@@ -307,9 +320,12 @@ class CrossNormalizedModel(nn.Module):
         self.clinical_model = None
 
         if self.includes_clinical:
-            dnn_input_dim = dnn_input_dim + n_clinical + sum(embedding_dims.values())-3
+            dnn_input_dim += n_clinical-3
+            if include_categoricals:
+                dnn_input_dim += sum(embedding_dims.values())
             self.clinical_model = ClinicalModel(covariate_cardinality, embedding_dims,
-                                                n_clinical-3, leakyrelu=leakyrelu)
+                                                n_clinical-3, leakyrelu=leakyrelu,
+                                                include_categoricals=include_categoricals)
         if use_shallow:
             self.connected_layers = ShallowConnectedLayers(dnn_input_dim, kaiming_weights=kaiming_weights,
                                                            output_xavier=output_xavier, dropout=dropout,

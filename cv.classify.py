@@ -20,7 +20,8 @@ from amlml.data_loader import (
 
 args = dict(
     filter_ambiguous=30,
-    include_clinical_variables=False,
+    include_clinical_variables=True,
+    include_categoricals=True,
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
@@ -81,6 +82,19 @@ prefilter_args = dict(
     keep_tech=None,
     keep_event=None,
     keep_minimum_censorship=30,
+    # keep_clinical_variables=[
+    #     "Age at Diagnosis in Days", "Bone marrow leukemic blast percentage (%)",
+    #     "CEBPA mutation", "CNS disease", "MLL", "NPM mutation", "Peripheral blasts (%)",
+    #     "WBC at Diagnosis", "inv(16)", "t(8;21)", "Race", "Protocol", "Ethnicity"
+    #     ],
+    keep_clinical_variables=[
+        "Age at Diagnosis in Days", "Bone marrow leukemic blast percentage (%)",
+        "CEBPA mutation", "CNS disease", "Chloroma", "FLT3/ITD positive?", "KMT2A-MLLT3",
+        "MLL", "Minus X", "NPM mutation", "Peripheral blasts (%)", "WBC at Diagnosis",
+        "WT1 mutation", "del9q", "inv(16)", "monosomy 7", "t(10;11)(p11.2;q23)", "t(6;9)",
+        "t(8;21)", "trisomy 21", "trisomy 8",
+        "Race", "Protocol", "Ethnicity"
+        ],
     filter_duration=None,
     filter_age=None
     )
@@ -97,7 +111,6 @@ methods = [
     ]
 
 iter_args = dict(
-    # include_clinical_variables=[True, False],
     # use_shallow=[True, False],
     # leakyrelu=[0, 0.1]
     # rmst_max_time=[2038, 5*365, 7*365],
@@ -126,7 +139,7 @@ for run_args in iter_args:
         depth = "shallow" if args["use_shallow"] else "deep"
         rmst = "with" if args["use_rmst"] else "without"
         qnorm = "with" if args["qnorm_coxnet"] else "without"
-        thresh = f"{args["classification_threshold"]//365}"
+        thresh = f"{args["classification_threshold"]/365:.1f}"
         leaky = ".leaky" if args["leakyrelu"] > 0 else ""
 
         outname = f"cv_classify.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}_{qnorm}_qnorm{leaky}"
