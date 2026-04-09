@@ -271,7 +271,7 @@ class TestResult:
 
     def roc(self, calibrated=False):
         if self.classes_test is None:
-            return np.nan, np.nan, np.nan, np.nan
+            return np.nan, np.nan, [], []
         predicted = "Calibrated" if calibrated else "Predicted"
         data = (self.classes_test.Truth, self.classes_test[predicted])
         roc = pd.DataFrame(dict(zip(["FPR", "TPR", "Threshold"], roc_curve(*data))))
