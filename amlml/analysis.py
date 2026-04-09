@@ -310,7 +310,7 @@ def evaluate_hazards(network, metrics, train, test,
             print(f"Warning: model diverged (loss={losses_train[-1]}. Skipping evaluation.")
             result = TestResult(fold, alpha, alpha_index, genes, best_epoch, learning_rates, losses_train, losses_test,
                                 hazards_train=predictions_train, hazards_test=predictions_test,
-                                first_weights=first_weights)
+                                first_weights=first_weights, name=train.name)
             return result
 
         baseline_hazards = compute_baseline_hazards(train.outcome_target_table, predictions_train)

@@ -91,7 +91,7 @@ class TestResult:
                  risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
                  survival_train=None, survival_test=None, first_weights=None,
                  classes_train=None, classes_test=None,
-                 classify_loss_train=None, classify_loss_test=None,
+                 classify_loss_train=np.nan, classify_loss_test=np.nan,
                  parameters=None, name=None, km_table_train=None, km_table_test=None,
                  classifier=None, norm_method=None, clinical=None, leaky=None,
                  l1_method=None, shallow=None, rmst=None, qnorm=None, threshold=None):
@@ -279,6 +279,8 @@ class TestResult:
         return roc, roc_auc, youden, euclid
 
     def precision_recall(self, calibrated=False):
+        if self.classes_test is None:
+            return np.nan, np.nan
         predicted = "Calibrated" if calibrated else "Predicted"
         data = (self.classes_test.Truth, self.classes_test[predicted])
         pr = list(precision_recall_curve(*data))
@@ -349,6 +351,8 @@ class TestResult:
         return report
 
     def classification_accuracy(self):
+        if self.classes_test is None:
+            return np.nan, np.nan
         accuracy = accuracy_score(self.classes_test.Truth,
                                   self.classes_test.Classification)
         macro = precision_recall_fscore_support(self.classes_test.Truth,
