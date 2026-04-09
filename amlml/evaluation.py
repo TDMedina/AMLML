@@ -91,7 +91,7 @@ class TestResult:
                  risk_splits=None, risk_split_quantiles=None, risk_split_counts=None, logranks=None,
                  survival_train=None, survival_test=None, first_weights=None,
                  classes_train=None, classes_test=None,
-                 classify_loss_train=np.nan, classify_loss_test=np.nan,
+                 classify_loss_train=None, classify_loss_test=None,
                  parameters=None, name=None, km_table_train=None, km_table_test=None,
                  classifier=None, norm_method=None, clinical=None, leaky=None,
                  l1_method=None, shallow=None, rmst=None, qnorm=None, threshold=None):
@@ -170,34 +170,64 @@ class TestResult:
             logranks = [round(x.p_value, 3) for x in self.logranks.values()]
             if len(logranks) == 1:
                 logranks = logranks[0]
-        table = pd.DataFrame([{
-            ("model", "alpha_index"): self.alpha_index,
-            ("model", "fold"): self.fold,
-            ("model", "alpha"): self.alpha,
-            ("model", "n_genes"): len(self.genes),
-            ("model", "n_epochs"): self.n_epochs,
-            ("model", "loss_train"): round(self.losses_train[best_epoch], 4),
-            ("model", "loss_test"): round(self.losses_test[best_epoch], 4),
+        if self.classes_test is None:
+            table = pd.DataFrame([{
+                ("model", "alpha_index"): self.alpha_index,
+                ("model", "fold"): self.fold,
+                ("model", "alpha"): self.alpha,
+                ("model", "n_genes"): len(self.genes),
+                ("model", "n_epochs"): self.n_epochs,
+                ("model", "loss_train"): round(self.losses_train[best_epoch], 4),
+                ("model", "loss_test"): round(self.losses_test[best_epoch], 4),
 
-            ("hazard", "pll_train_mean"): self.pll_train.mean() if self.pll_train is not None else None,
-            ("hazard", "pll_test_mean"): self.pll_test.mean() if self.pll_test is not None else None,
-            ("hazard", "ctd"): self.ctd,
-            ("hazard", "ibs"): self.ibs,
-            ("hazard", "risk_splits"): risk_splits,
-            ("hazard", "risk_split_quantiles"): risk_split_quantiles,
-            ("hazard", "risk_counts"): risk_counts,
-            ("hazard", "logranks"): logranks,
+                ("hazard", "pll_train_mean"): None,
+                ("hazard", "pll_test_mean"): None,
+                ("hazard", "ctd"): None,
+                ("hazard", "ibs"): None,
+                ("hazard", "risk_splits"): None,
+                ("hazard", "risk_split_quantiles"): None,
+                ("hazard", "risk_counts"): None,
+                ("hazard", "logranks"): None,
 
-            ("classify", "loss_train"): round(self.classify_loss_train, 4),
-            ("classify", "loss_test"): round(self.classify_loss_test, 4),
-            ("classify", "accuracy"): round(accuracy, 4),
-            ("classify", "macro"): round(macro[2], 4),
-            ("classify", "pr_auc"): round(self.precision_recall()[1], 4),
-            ("classify", "roc_auc"): round(roc_auc, 4),
-            ("classify", "roc_youden"): str([float(round(x, 2)) for x in youden]),
-            ("classify", "roc_euclid"): str([float(round(x, 2)) for x in euclid]),
+                ("classify", "loss_train"): None,
+                ("classify", "loss_test"): None,
+                ("classify", "accuracy"): None,
+                ("classify", "macro"): None,
+                ("classify", "pr_auc"): None,
+                ("classify", "roc_auc"): None,
+                ("classify", "roc_youden"): None,
+                ("classify", "roc_euclid"): None,
 
-            }])
+                }])
+        else:
+            table = pd.DataFrame([{
+                ("model", "alpha_index"): self.alpha_index,
+                ("model", "fold"): self.fold,
+                ("model", "alpha"): self.alpha,
+                ("model", "n_genes"): len(self.genes),
+                ("model", "n_epochs"): self.n_epochs,
+                ("model", "loss_train"): round(self.losses_train[best_epoch], 4),
+                ("model", "loss_test"): round(self.losses_test[best_epoch], 4),
+
+                ("hazard", "pll_train_mean"): self.pll_train.mean() if self.pll_train is not None else None,
+                ("hazard", "pll_test_mean"): self.pll_test.mean() if self.pll_test is not None else None,
+                ("hazard", "ctd"): self.ctd,
+                ("hazard", "ibs"): self.ibs,
+                ("hazard", "risk_splits"): risk_splits,
+                ("hazard", "risk_split_quantiles"): risk_split_quantiles,
+                ("hazard", "risk_counts"): risk_counts,
+                ("hazard", "logranks"): logranks,
+
+                ("classify", "loss_train"): round(self.classify_loss_train, 4),
+                ("classify", "loss_test"): round(self.classify_loss_test, 4),
+                ("classify", "accuracy"): round(accuracy, 4),
+                ("classify", "macro"): round(macro[2], 4) if macro else None,
+                ("classify", "pr_auc"): round(self.precision_recall()[1], 4),
+                ("classify", "roc_auc"): round(roc_auc, 4) if roc_auc else None,
+                ("classify", "roc_youden"): str([float(round(x, 2)) for x in youden]),
+                ("classify", "roc_euclid"): str([float(round(x, 2)) for x in euclid]),
+
+                }])
         if include_name:
             table[("model", "name")] = self.name
             table.set_index([("model", "name"), ("model", "alpha_index"), ("model", "fold")],
@@ -271,7 +301,7 @@ class TestResult:
 
     def roc(self, calibrated=False):
         if self.classes_test is None:
-            return np.nan, np.nan, [], []
+            return None, None, None, None
         predicted = "Calibrated" if calibrated else "Predicted"
         data = (self.classes_test.Truth, self.classes_test[predicted])
         roc = pd.DataFrame(dict(zip(["FPR", "TPR", "Threshold"], roc_curve(*data))))
@@ -282,7 +312,7 @@ class TestResult:
 
     def precision_recall(self, calibrated=False):
         if self.classes_test is None:
-            return np.nan, np.nan
+            return None, None
         predicted = "Calibrated" if calibrated else "Predicted"
         data = (self.classes_test.Truth, self.classes_test[predicted])
         pr = list(precision_recall_curve(*data))
@@ -354,7 +384,7 @@ class TestResult:
 
     def classification_accuracy(self):
         if self.classes_test is None:
-            return np.nan, np.nan
+            return None, None
         accuracy = accuracy_score(self.classes_test.Truth,
                                   self.classes_test.Classification)
         macro = precision_recall_fscore_support(self.classes_test.Truth,
