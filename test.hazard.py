@@ -1,6 +1,5 @@
 
 from datetime import datetime
-import os
 import pickle
 from pathlib import Path
 
@@ -16,7 +15,8 @@ from amlml.data_loader import (normalization_generator, prepare_log2_expression,
 
 args = dict(
     filter_ambiguous=30,
-    include_clinical_variables=False,
+    include_clinical_variables=True,
+    include_categoricals=True,
     covariate_cardinality={"race": 7, "ethnicity": 3, "protocol": 7},
 
     # Regularization.
@@ -24,7 +24,7 @@ args = dict(
 
     # Coxnet demands numerical values for some params even when not used.
     coxnet_n_alphas=1,
-    coxnet_alpha_min_ratio=0.01,
+    coxnet_alpha_min_ratio=0.01,  # Placeholder, as per above.
     coxnet_alphas=None,  # Handled by arg iterator below.
     qnorm_coxnet=False,
 
@@ -36,9 +36,8 @@ args = dict(
     rel_slope_threshold=0.00105,
     # batch_size=350,
     batch_size=2000,
-    # epochs=360,
-    epochs=2500,
-    min_epochs=1000,
+    epochs=250,
+    min_epochs=10,
     dropout=0.2,
     leakyrelu=0,
 
@@ -76,45 +75,67 @@ prefilter_args = dict(
     keep_tech=None,
     keep_event=None,
     keep_minimum_censorship=30,
+    # keep_clinical_variables=[
+    #     "Age at Diagnosis in Days", "Bone marrow leukemic blast percentage (%)",
+    #     "CEBPA mutation", "CNS disease", "MLL", "NPM mutation", "Peripheral blasts (%)",
+    #     "WBC at Diagnosis", "inv(16)", "t(8;21)", "Race", "Protocol", "Ethnicity"
+    #     ],
+    keep_clinical_variables=[
+        "Age at Diagnosis in Days", "Bone marrow leukemic blast percentage (%)",
+        "CEBPA mutation", "CNS disease", "Chloroma", "FLT3/ITD positive?", "KMT2A-MLLT3",
+        "MLL", "Minus X", "NPM mutation", "Peripheral blasts (%)", "WBC at Diagnosis",
+        "WT1 mutation", "del9q", "inv(16)", "monosomy 7", "t(10;11)(p11.2;q23)", "t(6;9)",
+        "t(8;21)", "trisomy 21", "trisomy 8",
+        "Race", "Protocol", "Ethnicity"
+        ],
     filter_duration=None,
     filter_age=None
     )
 
-methods = [
-    prepare_log2_expression,
-    prepare_log2_expression,
-    # prepare_zscore_expression,
-    # prepare_npn_expression,
-    # prepare_qn_expression,
-    # prepare_qnz_expression,
-    # prepare_supermodel_expression,
-    # prepare_zupermodel_expression
-]
 
-iter_args = dict(
-    methods=methods,
-    coxnet_alphas=[[0.0805], [0.026554]],
-    # include_clinical_variables=[False, False],
-    use_shallow=[False, False],
-    calibration_oof_path=[
-        "/home/tyler/Documents/Projects/ML/Data/2026-Apr-01/results_classify.1.deep.without_clinical.with_rmst.coxnet_without_qnorm.leaky/oof_tables/LOG2.train.subset.ambiguity_filtered.gene_subset.alpha_0.oof_table.tsv",
-        "/home/tyler/Documents/Projects/ML/Data/2026-Apr-01/results_classify.1.deep.without_clinical.with_rmst.coxnet_without_qnorm.leaky/oof_tables/LOG2.train.subset.ambiguity_filtered.gene_subset.alpha_2.oof_table.tsv"
-        ]
-    )
+testers = [
+    dict(methods=prepare_log2_expression, coxnet_alphas=[0.0805], use_shallow=False,
+         calibration_oof_path="./Data/2026-Apr-09.Classify/"),
+    dict(methods=prepare_log2_expression, coxnet_alphas=[0.0805], use_shallow=False,
+         calibration_oof_path="./Data/2026-Apr-09.Classify/"),
+    ]
 
-iter_args = [dict(zip(iter_args.keys(), iter_vals)) for iter_vals in zip(*iter_args.values())]
+
+
+# methods = [
+#     prepare_log2_expression,
+#     prepare_log2_expression,
+#     # prepare_zscore_expression,
+#     # prepare_npn_expression,
+#     # prepare_qn_expression,
+#     # prepare_qnz_expression,
+#     # prepare_supermodel_expression,
+#     # prepare_zupermodel_expression
+# ]
+#
+# iter_args = dict(
+#     methods=methods,
+#     coxnet_alphas=[[0.0805], [0.026554]],
+#     leakyrelu=[0, 1],
+#     # include_clinical_variables=[False, False],
+#     use_shallow=[False, False],
+#     calibration_oof_path=[
+#         "path",
+#         "path"
+#         ]
+#     )
+
+# iter_args = [dict(zip(iter_args.keys(), iter_vals)) for iter_vals in zip(*iter_args.values())]
 
 today = datetime.today().strftime("%Y-%b-%d")
-save = False
+save = True
 
 all_results = []
-for run_args in iter_args:
+for run_args in testers:
     print("Args:", run_args)
     oof_path = run_args["calibration_oof_path"]
     del run_args["calibration_oof_path"]
-    args["datasets"] = normalization_generator([run_args["methods"]],
-                                               verbose=True,
-                                               **prefilter_args)
+    args["datasets"] = normalization_generator([run_args["methods"]], verbose=True, **prefilter_args)
     args.update(run_args)
     del args["methods"]
 

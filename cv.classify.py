@@ -1,7 +1,7 @@
 
 from datetime import datetime
 from itertools import product
-import os
+from pathlib import Path
 import pickle
 
 from amlml.analysis import run_multiple
@@ -43,13 +43,11 @@ args = dict(
     rel_slope_threshold=1e-3,
     batch_size=2000,
     epochs=250,
-    # min_epochs=1000,
     min_epochs=10,
     dropout=0.2,
     leakyrelu=0.1,
 
     # Learning rate.
-    # lr_init=None,
     lr_init=0.001,
     constant_lr=False,
     epochs_per_cycle=100,
@@ -113,7 +111,7 @@ methods = [
 
 iter_args = dict(
     # use_shallow=[True, False],
-    # leakyrelu=[0, 0.1]
+    # leakyrelu=[0, 0.1],
     # rmst_max_time=[2038, 5*365, 7*365],
     # classification_threshold=[3*365, 2038, 7*365]
     )
@@ -146,8 +144,7 @@ for run_args in iter_args:
         outname = f"cv_classify.{thresh}.{depth}.{clinical}_clinical.{rmst}_rmst.{l1_reg}_{qnorm}_qnorm{leaky}"
         outpath = f"./Data/{today}/{outname}/"
         oof_dir = f"{outpath}/oof_tables/"
-        os.makedirs(outpath)
-        os.makedirs(oof_dir)
+        Path(oof_dir).mkdir(parents=True, exist_ok=True)
         with open(f"{outpath}/{outname}.pickle", "wb") as outfile:
             pickle.dump(cv_results, outfile)
         with open(f"{outpath}/{outname}.args", "w") as outfile:
