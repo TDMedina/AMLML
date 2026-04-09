@@ -157,6 +157,7 @@ class TestResult:
     #     return outname
 
     def tabulate(self, include_name=True, classify=False):
+        best_epoch = self.n_epochs-1
         flatten = lambda thing: (thing if (thing is None or len(thing) > 1) else thing[0])
         risk_splits = flatten(self.risk_splits)
         risk_split_quantiles = flatten(self.risk_split_quantiles)
@@ -175,8 +176,8 @@ class TestResult:
             ("model", "alpha"): self.alpha,
             ("model", "n_genes"): len(self.genes),
             ("model", "n_epochs"): self.n_epochs,
-            ("model", "loss_train"): round(self.losses_train[-1], 4),
-            ("model", "loss_test"): round(self.losses_test[-1], 4),
+            ("model", "loss_train"): round(self.losses_train[best_epoch], 4),
+            ("model", "loss_test"): round(self.losses_test[best_epoch], 4),
 
             ("hazard", "pll_train_mean"): self.pll_train.mean() if self.pll_train is not None else None,
             ("hazard", "pll_test_mean"): self.pll_test.mean() if self.pll_test is not None else None,
@@ -224,6 +225,7 @@ class TestResult:
         if _as_subplot:
             return subplots
         figure = go.Figure(subplots)
+        figure.add_vline(x=self.n_epochs)
         return figure
 
     def plot_pll(self):
@@ -239,6 +241,7 @@ class TestResult:
         if _as_subplot:
             return [subplot]
         figure = go.Figure(subplot)
+        figure.add_vline(x=self.n_epochs)
         return figure
 
     def tabulate_predictions(self, data=Literal["train", "test"]):

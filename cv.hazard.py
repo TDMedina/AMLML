@@ -27,10 +27,10 @@ args = dict(
     # Regularization.
     feature_selector="coxnet",
 
-    coxnet_n_alphas=1,  # Note: Reset this.
-    coxnet_alpha_min_ratio=1/32,  # Note: Reset this to 1/64.
+    coxnet_n_alphas=5,
+    coxnet_alpha_min_ratio=1/32,
     coxnet_alphas=None,
-    qnorm_coxnet=False,  # Note: New.
+    qnorm_coxnet=False,
 
     network_l1_alphas=[0.01, 0.1, 0.2, 0.3, 0.4, 0.5],
     network_weight_decay=1e-4,
@@ -42,8 +42,8 @@ args = dict(
     cov_threshold=0.00105,
     rel_slope_threshold=0.00105,
     batch_size=2000,
-    epochs=2500,
-    min_epochs=1000,
+    epochs=250,
+    min_epochs=10,
     dropout=0.2,
     leakyrelu=0,
 
@@ -101,13 +101,13 @@ prefilter_args = dict(
 
 methods = [
     prepare_log2_expression,
-    # prepare_zscore_expression,
-    # prepare_npn_expression,
+    prepare_zscore_expression,
+    prepare_npn_expression,
     # prepare_qn_expression,
     # prepare_qnz_expression,
-    # prepare_supermodel_expression,
-    # prepare_superlogger_expression,
-    # prepare_zupermodel_expression
+    prepare_supermodel_expression,
+    prepare_superlogger_expression,
+    prepare_zupermodel_expression
     ]
 
 iter_args = dict(

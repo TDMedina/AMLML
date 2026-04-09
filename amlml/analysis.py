@@ -1,5 +1,6 @@
 
 from collections import namedtuple
+import copy
 import math
 from string import ascii_uppercase
 from typing import Callable, Literal
@@ -38,6 +39,37 @@ else:
 
 
 ConvergeTest = namedtuple("ConvergeTest", ["passed", "score", "threshold"])
+
+
+
+class EarlyStopping:
+    def __init__(self, model, patience=25, min_rel_delta=0.01):
+        self.patience = patience
+        self.min_rel_delta = min_rel_delta
+        self.counter = 0
+        self.best_loss = None
+        self.best_model = None
+        self.best_epoch = 1
+        self.early_stop = False
+        self.model = model
+
+    def __call__(self, val_loss, epoch):
+        if self.best_loss is None:
+            self.best_loss = val_loss
+            self.best_model = copy.deepcopy(self.model.state_dict())
+            return 0
+
+        change = (self.best_loss - val_loss) / self.best_loss
+        if change >= self.min_rel_delta:
+            self.best_loss = val_loss
+            self.best_epoch = epoch
+            self.counter = 0
+            self.best_model = copy.deepcopy(self.model.state_dict())
+        else:
+            self.counter += 1
+            if self.counter >= self.patience:
+                self.early_stop = True
+        return change
 
 
 def generate_loss_slope_test(rel_slope_threshold=0.01, n_losses=10):
@@ -166,6 +198,7 @@ def train_network(network, optimizer, lr_scheduler, loss_fn, train, test,
                   convergence_test, len_loss_convergence, end_with_lr_cycle,
                   batch_size, network_l1_alpha=None):
     losses_train, losses_test, learning_rates = [], [], []
+    stopper = EarlyStopping(network)
     progress = tqdm(range(1, epochs + 1), desc="Epochs",
                     postfix={"Loss": "0", "Test Loss": "0", "Var": "--", "Slope": "--"},
                     dynamic_ncols=True, position=0, leave=True)
@@ -194,24 +227,33 @@ def train_network(network, optimizer, lr_scheduler, loss_fn, train, test,
             losses_test.append(loss_test)
 
             # Track epoch loss and check loss convergence.
-            if len(losses_train) < len_loss_convergence:
-                progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss": f"{losses_test[-1]:.3f}",
-                                      "Var": "--", "Slope": "--"})
+            change = stopper(losses_test[-1], epoch)
+            progress.set_postfix({"Train": f"{losses_train[-1]:.3f}",
+                                  "Test": f"{losses_test[-1]:.3f}",
+                                  "Change": f"{change:.4f}"})
+            if len(losses_train) < min_epochs:
                 continue
-            converge_check = convergence_test(losses_train[-len_loss_convergence:])
-            progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss": f"{losses_test[-1]:.3f}",
-                                  "Var": f"{converge_check.score[0]:.4f}", "Slope": f"{converge_check.score[1]:.4f}"})
-            if (converge_check.passed and epoch >= min_epochs
-                    and (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)):
+            if stopper.early_stop:
+                print(f"\nEarly stop: Reverting to epoch {stopper.best_epoch}: "
+                      f"{stopper.best_loss:.3f}")
                 break
+    if stopper.best_model is not None:
+        network.load_state_dict(stopper.best_model)
 
-    return losses_train, losses_test, learning_rates, epoch
+            # converge_check = convergence_test(losses_train[-len_loss_convergence:])
+            # progress.set_postfix({"Loss": f"{losses_train[-1]:.3f}", "Test Loss": f"{losses_test[-1]:.3f}",
+            #                       "Var": f"{converge_check.score[0]:.4f}", "Slope": f"{converge_check.score[1]:.4f}"})
+            # if (converge_check.passed and epoch >= min_epochs
+            #         and (epoch % epochs_per_cycle == 0 or not end_with_lr_cycle)):
+            #     break
+
+    return losses_train, losses_test, learning_rates, stopper.best_epoch
 
 
 def evaluate_classifier(network, metrics, train, test,
                         fold, alpha, alpha_index, genes,
                         save_network=False):
-    losses_train, losses_test, learning_rates, epoch = metrics
+    losses_train, losses_test, learning_rates, best_epoch = metrics
 
     network.eval()
     with torch.no_grad():
@@ -236,7 +278,7 @@ def evaluate_classifier(network, metrics, train, test,
             alpha=alpha,
             alpha_index=alpha_index,
             genes=genes,
-            n_epochs=epoch,
+            n_epochs=best_epoch,
             lrs=[float(x[0]) for x in learning_rates],
             losses_train=losses_train,
             losses_test=losses_test,
@@ -255,7 +297,7 @@ def evaluate_hazards(network, metrics, train, test,
                      fold, alpha, alpha_index, genes,
                      skip_diverged=True, hazard_classify=True, survival_splits=2,
                      save_network=False):
-    losses_train, losses_test, learning_rates, epoch = metrics
+    losses_train, losses_test, learning_rates, best_epoch = metrics
 
     network.eval()
     with torch.no_grad():
@@ -266,7 +308,7 @@ def evaluate_hazards(network, metrics, train, test,
 
         if skip_diverged and losses_train[-1] > 50:
             print(f"Warning: model diverged (loss={losses_train[-1]}. Skipping evaluation.")
-            result = TestResult(fold, alpha, alpha_index, genes, epoch, learning_rates, losses_train, losses_test,
+            result = TestResult(fold, alpha, alpha_index, genes, best_epoch, learning_rates, losses_train, losses_test,
                                 hazards_train=predictions_train, hazards_test=predictions_test,
                                 first_weights=first_weights)
             return result
@@ -323,7 +365,7 @@ def evaluate_hazards(network, metrics, train, test,
             alpha=alpha,
             alpha_index=alpha_index,
             genes=genes,
-            n_epochs=epoch,
+            n_epochs=best_epoch,
             lrs=[float(x[0]) for x in learning_rates],
             losses_train=losses_train,
             losses_test=losses_test,

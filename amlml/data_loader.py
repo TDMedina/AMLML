@@ -659,7 +659,7 @@ def _prepare_non_categorical(data, cols, splits, age_as_binary=True, binary_fill
         bin_names.append("is_child")
     cont_mask, bin_mask = pd.isna(continuous).astype(int), pd.isna(binary).astype(int)
 
-    continuous_train, continuous_test = continuous.iloc[splits[0]], continuous.iloc[splits[1]]
+    continuous_train, continuous_test = continuous.iloc[splits[0]].copy(), continuous.iloc[splits[1]].copy()
     means = continuous_train.mean().to_dict()
     continuous_train.fillna(means, inplace=True)
     continuous_test.fillna(means, inplace=True)
@@ -670,7 +670,7 @@ def _prepare_non_categorical(data, cols, splits, age_as_binary=True, binary_fill
     cont_mask_train, cont_mask_test = (np.stack([continuous_train, cont_mask_train]),
                                        np.stack([continuous_test, cont_mask_test]))
 
-    bin_train, bin_test = binary.iloc[splits[0]], binary.iloc[splits[1]]
+    bin_train, bin_test = binary.iloc[splits[0]].copy(), binary.iloc[splits[1]].copy()
     if binary_fill == "mode":
         fill = bin_train.mode().T[0].to_dict()
     elif binary_fill == "mean":
